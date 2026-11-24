@@ -1,6 +1,7 @@
 import { del, get as idbGet, set as idbSet } from 'idb-keyval'
 import { create } from 'zustand'
 import { buildCurrentPages } from './lib/currentPages'
+import { contentBottom, flowPositions, FRAMES, frameWidthOf, heightFrom } from './lib/layout'
 import { migrateProject, PROJECT_VERSION } from './lib/projectFile'
 import { createJSONStorage, persist, type StateStorage } from 'zustand/middleware'
 import { blockNode } from './lib/render'
@@ -12,9 +13,9 @@ const newPage = (name: string): Page => ({ id: id(), name, notes: '', blocks: []
 
 const currentPages = (components: ScannedComponent[]): Page[] =>
   buildCurrentPages(components).map(c => {
-    const blocks: Block[] = c.blocks.map(item => ({ id: id(), width: 100, notes: '', ...item }))
+    const blocks: Block[] = c.blocks.map(item => ({ id: id(), x: 0, y: 0, w: FRAMES[0].width, notes: '', ...item }))
     // `original` is a snapshot of the page as imported, so the export can say what changed.
-    return { ...newPage(c.name), blocks, original: blocks, route: c.route, componentId: c.componentId }
+    return { ...newPage(c.name), flow: true, blocks, original: blocks, route: c.route, componentId: c.componentId }
   })
 
 const emptyProject = (): Project => ({
@@ -36,6 +37,8 @@ interface State {
   selectedElementPath: string | null
   /** How dragging inside a block works: place freely (offset) or reorder in the layout. */
   editMode: 'free' | 'reorder'
+  /** Each block's content height as its preview last measured it (page px). Not persisted. */
+  measured: Record<string, number>
 
   setProjectName: (name: string) => void
   setGlobalNotes: (notes: string) => void
@@ -59,13 +62,14 @@ interface State {
   deletePage: (pageId: string) => void
   setActivePage: (pageId: string) => void
   setPageNotes: (notes: string) => void
+  setFrameWidth: (width: number) => void
 
-  /** Insert a block from the bank at `index` (end of page if omitted). */
-  addBlock: (item: BankItem, index?: number) => void
-  moveBlock: (from: number, to: number) => void
+  /** Place a block from the bank with its top-left at `at` (page px; below the content if omitted). Freezes a flow page. */
+  addBlock: (item: BankItem, at?: { x: number; y: number }) => void
   updateBlock: (blockId: string, patch: Partial<Omit<Block, 'id'>>) => void
   deleteBlock: (blockId: string) => void
   selectBlock: (blockId: string | null) => void
+  setMeasured: (blockId: string, height: number) => void
 
   startEditing: (blockId: string) => void
   stopEditing: () => void
@@ -122,6 +126,7 @@ export const useStore = create<State>()(
         editingBlockId: null,
         selectedElementPath: null,
         editMode: 'free',
+        measured: {},
 
         setProjectName: name => set(s => ({ project: { ...s.project, name } })),
         setGlobalNotes: globalNotes => set(s => ({ project: { ...s.project, globalNotes } })),
@@ -166,22 +171,24 @@ export const useStore = create<State>()(
           }),
         setActivePage: activePageId => set({ activePageId, selectedBlockId: null, editingBlockId: null, selectedElementPath: null }),
         setPageNotes: notes => editActivePage(p => ({ ...p, notes })),
+        setFrameWidth: frameWidth => editActivePage(p => ({ ...p, frameWidth })),
 
-        addBlock: (item, index) => {
-          const block: Block = { id: id(), width: 100, notes: '', ...item }
+        addBlock: (item, at) => {
+          const heightOf = heightFrom(get().measured)
+          const blockId = id()
           editActivePage(p => {
-            const blocks = [...p.blocks]
-            blocks.splice(index ?? blocks.length, 0, block)
-            return { ...p, blocks }
+            const fw = frameWidthOf(p)
+            // The first positioned edit freezes the computed flow layout, original snapshot included, so the brief can compare.
+            const frozen = p.flow
+              ? { ...p, flow: false, blocks: flowPositions(p.blocks, fw, heightOf), original: p.original && flowPositions(p.original, fw, heightOf) }
+              : p
+            const w = fw // shortcut: new blocks span the frame until M2 adds resizing
+            const { x, y } = at ?? { x: 0, y: contentBottom(frozen.blocks, heightOf) }
+            const block: Block = { id: blockId, notes: '', ...item, w, x: Math.round(Math.min(Math.max(0, x), fw - w)), y: Math.round(Math.max(0, y)) }
+            return { ...frozen, blocks: [...frozen.blocks, block] }
           })
-          set({ selectedBlockId: block.id })
+          set({ selectedBlockId: blockId })
         },
-        moveBlock: (from, to) =>
-          editActivePage(p => {
-            const blocks = [...p.blocks]
-            blocks.splice(to, 0, ...blocks.splice(from, 1))
-            return { ...p, blocks }
-          }),
         updateBlock: (blockId, patch) =>
           editActivePage(p => ({
             ...p,
@@ -215,6 +222,8 @@ export const useStore = create<State>()(
             })
             return { project: { ...s.project, tokens } }
           }),
+
+        setMeasured: (blockId, height) => set(s => (s.measured[blockId] === height ? s : { measured: { ...s.measured, [blockId]: height } })),
 
         startEditing: blockId => set({ selectedBlockId: blockId, editingBlockId: blockId, selectedElementPath: null }),
         stopEditing: () => set({ editingBlockId: null, selectedElementPath: null }),

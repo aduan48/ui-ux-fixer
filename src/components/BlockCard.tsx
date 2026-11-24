@@ -1,29 +1,10 @@
-import { useSortable } from '@dnd-kit/sortable'
-import { CSS } from '@dnd-kit/utilities'
 import { Check, ImageIcon, MessageSquareText, MousePointer2, RotateCcw, Trash2 } from 'lucide-react'
-import { useMemo, useRef, useState } from 'react'
+import { useMemo } from 'react'
 import { placeholderMeta } from '../lib/catalog'
 import { labelAt, renderBlock } from '../lib/render'
 import { useStore } from '../store'
 import type { Block, PlaceholderType } from '../types'
 import { Preview } from './Preview'
-
-const COL = 100 / 12
-const PRESETS = [
-  { width: 100, label: 'Full' },
-  { width: 50, label: '1/2' },
-  { width: 100 / 3, label: '1/3' },
-]
-const MIN_HEIGHT = 32
-
-/** Snap to twelfths unless `free`; always between one column and full width. */
-const clampWidth = (pct: number, free: boolean) =>
-  Math.min(100, Math.max(COL, free ? pct : Math.round(pct / COL) * COL))
-
-const widthLabel = (w: number) => {
-  const cols = w / COL
-  return Math.abs(cols - Math.round(cols)) < 0.01 ? `${Math.round(cols)}/12` : `${Math.round(w)}%`
-}
 
 export function useBlockTitle(block: Block | undefined) {
   const component = useStore(s => s.project.components.find(c => c.id === block?.componentId))
@@ -34,74 +15,37 @@ export function useBlockTitle(block: Block | undefined) {
   return component.name
 }
 
-export function BlockCard({ block }: { block: Block }) {
+/** A block at its place on the page frame. `placed` carries the drawn position (computed on flow pages). */
+export function BlockCard({ block, placed }: { block: Block; placed: Pick<Block, 'x' | 'y' | 'w'> }) {
   const selected = useStore(s => s.selectedBlockId === block.id)
   const editing = useStore(s => s.editingBlockId === block.id)
   const editMode = useStore(s => s.editMode)
   const components = useStore(s => s.project.components)
   const assets = useStore(s => s.project.assets)
-  const { selectBlock, updateBlock, deleteBlock, startEditing, stopEditing, resetBlockTree } = useStore.getState()
-  const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({ id: block.id, disabled: editing })
+  const { selectBlock, deleteBlock, startEditing, stopEditing, resetBlockTree } = useStore.getState()
   const title = useBlockTitle(block)
   const html = useMemo(() => renderBlock(block, components, assets), [block, components, assets])
-
-  const wrapperRef = useRef<HTMLDivElement | null>(null)
-  const cardRef = useRef<HTMLDivElement>(null)
-  const [resizing, setResizing] = useState(false)
-
-  /** Pointer-captured drag on a handle; the handle sits outside the dnd-kit listeners. */
-  const startResize = (axis: 'x' | 'y') => (e: React.PointerEvent<HTMLDivElement>) => {
-    e.stopPropagation()
-    e.preventDefault()
-    const handle = e.currentTarget
-    handle.setPointerCapture(e.pointerId)
-    const start = { x: e.clientX, y: e.clientY }
-    const startWidth = wrapperRef.current!.getBoundingClientRect().width
-    const containerWidth = wrapperRef.current!.parentElement!.clientWidth
-    const startHeight = cardRef.current!.offsetHeight
-    setResizing(true)
-    handle.onpointermove = ev => {
-      if (axis === 'x') updateBlock(block.id, { width: clampWidth(((startWidth + ev.clientX - start.x) / containerWidth) * 100, ev.shiftKey) })
-      else updateBlock(block.id, { height: Math.max(MIN_HEIGHT, Math.round(startHeight + ev.clientY - start.y)) })
-    }
-    handle.onpointerup = handle.onpointercancel = () => {
-      handle.onpointermove = handle.onpointerup = handle.onpointercancel = null
-      setResizing(false)
-    }
-  }
-
-  const keyResize = (axis: 'x' | 'y') => (e: React.KeyboardEvent) => {
-    const step = { ArrowRight: 1, ArrowUp: -1, ArrowLeft: -1, ArrowDown: 1 }[e.key]
-    if (!step) return
-    e.preventDefault()
-    if (axis === 'x') updateBlock(block.id, { width: clampWidth(block.width + step * COL, false) })
-    else updateBlock(block.id, { height: Math.max(MIN_HEIGHT, (block.height ?? cardRef.current!.offsetHeight) + step * 16) })
-  }
 
   const ring = editing ? 'ring-2 ring-violet-500' : selected ? 'ring-2 ring-blue-500' : 'group-hover:ring-1 group-hover:ring-blue-400'
   const chrome = selected || editing ? 'flex' : 'hidden group-hover:flex'
 
   return (
     <div
-      ref={el => { setNodeRef(el); wrapperRef.current = el }}
-      style={{ width: `${block.width}%`, transform: CSS.Translate.toString(transform), transition }}
+      style={{ left: placed.x, top: placed.y, width: placed.w }}
       // select-none: a double-click (enter editing) must not select the iframe as text, which greys it and hijacks the next drag
-      className={`group relative select-none ${isDragging ? 'z-20 opacity-60' : ''} ${selected || editing ? 'z-10' : 'hover:z-10'}`}
+      className={`group absolute select-none ${selected || editing ? 'z-10' : 'hover:z-10'}`}
     >
       <div
-        ref={cardRef}
-        {...attributes}
-        {...listeners}
         onClick={e => { e.stopPropagation(); selectBlock(block.id) }}
         onDoubleClick={() => html && startEditing(block.id)}
         aria-label={`${title} block`}
         style={{ height: block.height }}
-        className={`relative overflow-hidden bg-white ${editing ? '' : 'cursor-grab active:cursor-grabbing'}`}
+        className="relative overflow-hidden bg-white"
       >
         {block.kind === 'placeholder' ? (
           <PlaceholderBlock type={block.placeholder!} />
         ) : html ? (
-          <Preview blockId={block.id} html={html} blockWidth={block.width} editable={editing} />
+          <Preview blockId={block.id} html={html} width={placed.w} editable={editing} />
         ) : (
           <div className="m-2 rounded-md border-2 border-dashed border-red-300 bg-red-50 px-4 py-6 text-center text-xs text-red-700">
             {title}. Re-import the project to bring it back.
@@ -113,7 +57,7 @@ export function BlockCard({ block }: { block: Block }) {
       <div className={`pointer-events-none absolute inset-0 ${ring}`} />
 
       {/* Name chip */}
-      <div className={`pointer-events-none absolute top-0 left-0 max-w-[60%] items-center gap-1 rounded-br-md px-1.5 py-0.5 text-[11px] font-medium text-white ${editing ? 'flex bg-violet-500' : `${chrome} bg-blue-500`}`}>
+      <div className={`pointer-events-none absolute top-0 left-0 max-w-[60%] origin-top-left [scale:calc(1/var(--zoom,1))] items-center gap-1 rounded-br-md px-1.5 py-0.5 text-[11px] font-medium text-white ${editing ? 'flex bg-violet-500' : `${chrome} bg-blue-500`}`}>
         <span className="truncate">{title}</span>
         {block.tree && <span className="shrink-0 opacity-75">· edited</span>}
       </div>
@@ -124,7 +68,7 @@ export function BlockCard({ block }: { block: Block }) {
       )}
 
       {/* Toolbar: outside the drag listeners so its clicks never start a drag. */}
-      <div onClick={e => e.stopPropagation()} className={`absolute top-1 right-1 items-center gap-0.5 rounded-md border border-neutral-200 bg-white p-0.5 shadow-sm ${chrome}`}>
+      <div onClick={e => e.stopPropagation()} className={`absolute top-1 right-1 origin-top-right [scale:calc(1/var(--zoom,1))] items-center gap-0.5 rounded-md border border-neutral-200 bg-white p-0.5 shadow-sm ${chrome}`}>
         {editing ? (
           <>
             <EditModeToggle />
@@ -137,62 +81,12 @@ export function BlockCard({ block }: { block: Block }) {
         ) : (
           <>
             {html && <ToolButton onClick={() => startEditing(block.id)} icon={MousePointer2} label="Edit inside" />}
-            <span className="mx-0.5 h-4 w-px bg-neutral-200" />
-            {PRESETS.map(p => {
-              const on = Math.abs(block.width - p.width) < 0.01
-              return (
-                <button
-                  key={p.label}
-                  onClick={() => updateBlock(block.id, { width: p.width })}
-                  aria-pressed={on}
-                  className={`rounded px-1.5 py-0.5 text-[11px] font-medium ${on ? 'bg-neutral-900 text-white' : 'text-neutral-600 hover:bg-neutral-100'}`}
-                >
-                  {p.label}
-                </button>
-              )
-            })}
             <button onClick={() => deleteBlock(block.id)} aria-label="Delete block" className="rounded p-1 text-neutral-500 hover:bg-red-50 hover:text-red-600">
               <Trash2 className="size-3.5" />
             </button>
           </>
         )}
       </div>
-
-      {!editing && (
-        <>
-          <div
-            role="separator"
-            aria-orientation="vertical"
-            aria-label="Resize width (Shift for free size)"
-            aria-valuenow={Math.round(block.width)}
-            tabIndex={0}
-            onPointerDown={startResize('x')}
-            onKeyDown={keyResize('x')}
-            onClick={e => e.stopPropagation()}
-            className="absolute top-0 -right-1.5 bottom-0 z-10 flex w-3 cursor-ew-resize items-center justify-center opacity-0 group-hover:opacity-100 focus:opacity-100"
-          >
-            <div className="h-10 w-1.5 rounded-full border border-white bg-blue-500 shadow" />
-          </div>
-          <div
-            role="separator"
-            aria-orientation="horizontal"
-            aria-label="Resize height (double-click to fit content)"
-            tabIndex={0}
-            onPointerDown={startResize('y')}
-            onKeyDown={keyResize('y')}
-            onDoubleClick={() => updateBlock(block.id, { height: undefined })}
-            onClick={e => e.stopPropagation()}
-            className="absolute right-0 -bottom-1.5 left-0 z-10 flex h-3 cursor-ns-resize items-center justify-center opacity-0 group-hover:opacity-100 focus:opacity-100"
-          >
-            <div className="h-1.5 w-10 rounded-full border border-white bg-blue-500 shadow" />
-          </div>
-        </>
-      )}
-      {resizing && (
-        <div className="pointer-events-none absolute bottom-3 left-1/2 z-20 -translate-x-1/2 rounded bg-neutral-900 px-1.5 py-0.5 text-[11px] font-medium text-white">
-          {widthLabel(block.width)}{block.height ? ` × ${block.height}px` : ''}
-        </div>
-      )}
     </div>
   )
 }

@@ -49,8 +49,10 @@ export interface Block {
   /** For `element` blocks: index path into the component's tree, e.g. "0.2.1". */
   elementPath?: string
   placeholder?: PlaceholderType
-  /** Percent of the canvas width. Presets are 100 / 50 / 33.33; resizing snaps to twelfths. */
-  width: number
+  /** Position and width in page px, relative to the page frame. x/y are ignored while the page is `flow`. */
+  x: number
+  y: number
+  w: number
   /** Pixels; undefined = fit content. */
   height?: number
   /** String props the original page passed (<Hero title="Hi">), so previews show real copy. */
@@ -73,6 +75,10 @@ export interface Page {
   name: string
   notes: string
   blocks: Block[]
+  /** Page frame width in px (Desktop 1440, Tablet 768, Mobile 390); undefined = 1440. */
+  frameWidth?: number
+  /** Positions are computed (blocks wrap like text, rows as tall as their content) until the first positioned edit. */
+  flow?: boolean
   /** For pages rebuilt from the imported site: its route, the component that renders it, and its blocks as imported. */
   route?: string
   componentId?: string

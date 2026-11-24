@@ -4,7 +4,7 @@ import { parseProjectFile, PROJECT_VERSION, serializeProject } from './projectFi
 
 const project: Project = {
   name: 'Hockey', source: 'hockey', components: [], styles: [], assets: { 'a.png': 'data:image/png;base64,AA==' }, tokens: [],
-  globalNotes: 'premium', pages: [{ id: 'p1', name: 'Home', notes: '', blocks: [{ id: 'b1', kind: 'placeholder', placeholder: 'text', width: 50, notes: 'hi' }] }],
+  globalNotes: 'premium', pages: [{ id: 'p1', name: 'Home', notes: '', blocks: [{ id: 'b1', kind: 'placeholder', placeholder: 'text', x: 0, y: 0, w: 720, notes: 'hi' }], flow: true }],
 }
 
 describe('project files', () => {
@@ -15,7 +15,8 @@ describe('project files', () => {
   it('migrates files from older versions', () => {
     const v1 = JSON.stringify({ app: 'sketchkit', version: 1, project: { ...project, styles: undefined, assets: undefined, pages: [{ ...project.pages[0], blocks: [{ ...project.pages[0].blocks[0], width: 'half' }] }] } })
     const p = parseProjectFile(v1)
-    expect(p.pages[0].blocks[0].width).toBe(50)
+    expect(p.pages[0].blocks[0]).toEqual({ id: 'b1', kind: 'placeholder', placeholder: 'text', x: 0, y: 0, w: 720, notes: 'hi' })
+    expect(p.pages[0].flow).toBe(true)
     expect(p.assets).toEqual({})
     expect(p.styles).toEqual([])
   })

@@ -1,7 +1,7 @@
-import type { Project } from '../types'
+import type { Block, Project } from '../types'
 
 /** Version of the saved project shape. Bump it, and extend migrateProject, whenever Project changes shape. */
-export const PROJECT_VERSION = 3
+export const PROJECT_VERSION = 4
 
 /** Bring a project saved by an older SketchKit up to date. Used for browser saves and opened files alike. */
 export function migrateProject(project: Project, from: number): Project {
@@ -9,9 +9,20 @@ export function migrateProject(project: Project, from: number): Project {
     // v1: width was 'full' | 'half' | 'third'; no saved styles.
     const pct: Record<string, number> = { full: 100, half: 50, third: 100 / 3 }
     project.styles ??= []
-    for (const page of project.pages) for (const b of page.blocks) b.width = pct[b.width as unknown as string] ?? 100
+    for (const page of project.pages) for (const b of page.blocks as (Block & { width?: unknown })[]) b.width = pct[b.width as string] ?? 100
   }
   if (from < 3) project.assets ??= {} // v2 had no images
+  if (from < 4) {
+    // v3: width was a percent of a stacked canvas. Now page px on a 1440 frame; flow keeps the old wrapping until the first move.
+    for (const page of project.pages) {
+      page.flow = true
+      for (const b of [...page.blocks, ...(page.original ?? [])]) {
+        const old = b as Block & { width?: number }
+        Object.assign(b, { x: 0, y: 0, w: Math.round(((old.width ?? 100) * 1440) / 100) })
+        delete old.width
+      }
+    }
+  }
   return project
 }
 

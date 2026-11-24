@@ -135,7 +135,7 @@ describe('detailed previews', () => {
   const home = buildCurrentPages(components)[0]
   const block = (name: string) => {
     const item = home.blocks.find(b => b.kind !== 'placeholder' && components.find(c => c.id === b.componentId)?.name === name)!
-    return { id: 'x', width: 100, notes: '', ...item } as Block
+    return { id: 'x', x: 0, y: 0, w: 1440, notes: '', ...item } as Block
   }
 
   it('keeps the wrappers a section sat in on the page', () => {
@@ -259,7 +259,7 @@ export default function Home() { return <div className="home"><Puck /><div class
   })
 
   it('finds components imported under another name, inside the page wrappers', () => {
-    const hero = { id: 'x', width: 100, notes: '', ...pages[0].blocks[1] } as Block
+    const hero = { id: 'x', x: 0, y: 0, w: 1440, notes: '', ...pages[0].blocks[1] } as Block
     expect(renderBlock(hero, components, {})).toBe('<div class="App" data-sk-frame><div class="home" data-sk-frame><div class="hero"><h1 data-sk="0">Club Hockey</h1></div></div></div>')
   })
 })

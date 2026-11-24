@@ -1,5 +1,6 @@
 import type { Block, BrandToken, Page, PlaceholderType, Project, StaticNode, TokenKind, TokenRole } from '../types'
 import { blockNode, labelAt } from './render'
+import { frameWidthOf, heightFrom, placedBlocks, rowsOf } from './layout'
 import { withoutOffsets } from './treeEdit'
 
 // The brief is written for a coding agent (Claude Code etc.): concrete file paths, explicit
@@ -27,25 +28,12 @@ const ROLE_TITLES: Record<TokenRole, string> = { primary: 'Primary color', accen
 
 const code = (s: string) => '`' + s.replace(/`/g, "'") + '`'
 
-function widthText(w: number): string {
+/** Width as a share of the page frame: "full width", "6/12 width", "40% width". */
+function widthText(px: number, frameWidth: number): string {
+  const w = (px / frameWidth) * 100
   if (w >= 99.9) return 'full width'
   const cols = w / COL
   return Math.abs(cols - Math.round(cols)) < 0.01 ? `${Math.round(cols)}/12 width` : `${Math.round(w)}% width`
-}
-
-/** Consecutive blocks that wrap onto one line on the canvas (widths summing to 100% or less). */
-export function rowsOf(blocks: Block[]): Block[][] {
-  const rows: Block[][] = []
-  let sum = Infinity
-  for (const b of blocks) {
-    if (sum + b.width > 100.01) {
-      rows.push([])
-      sum = 0
-    }
-    rows[rows.length - 1].push(b)
-    sum += b.width
-  }
-  return rows
 }
 
 const position = (i: number, n: number) => (n === 2 ? ['left', 'right'][i] : n === 3 ? ['left', 'middle', 'right'][i] : `column ${i + 1} of ${n}`)
@@ -176,7 +164,7 @@ function blockLines(block: Block, project: Project, where: string, page: Page): 
     const moves = offsetsIn(block.tree)
     if (moves.length) {
       sub.push(
-        '**Reposition** (placed by hand in the sketch, measured on a 1280px-wide desktop layout). Get there with real layout: alignment, spacing, grid/flex, not hard-coded offsets:',
+        `**Reposition** (placed by hand in the sketch, measured on a ${frameWidthOf(page)}px-wide page). Get there with real layout: alignment, spacing, grid/flex, not hard-coded offsets:`,
         ...moves.map(([label, o]) => `  - ${code(label)}: ${moveText(o)} from where it sits now`),
       )
     }
@@ -186,16 +174,17 @@ function blockLines(block: Block, project: Project, where: string, page: Page): 
   return [lines[0], ...sub.map(s => (s.startsWith('  ') ? '  ' + s : `  - ${s}`))]
 }
 
-function layoutLines(blocks: Block[], project: Project, page: Page): string[] {
+function layoutLines(project: Project, page: Page, heightOf: (b: Block) => number): string[] {
   const out: string[] = []
-  rowsOf(blocks).forEach((row, r) => {
+  const fw = frameWidthOf(page)
+  rowsOf(placedBlocks(page, heightOf), heightOf).forEach((row, r) => {
     if (row.length === 1) {
-      const [first, ...rest] = blockLines(row[0], project, widthText(row[0].width), page)
+      const [first, ...rest] = blockLines(row[0], project, widthText(row[0].w, fw), page)
       out.push(`${r + 1}. ${first}`, ...rest.map(l => '   ' + l))
     } else {
       out.push(`${r + 1}. A row of ${row.length}, side by side:`)
       row.forEach((b, i) => {
-        const [first, ...rest] = blockLines(b, project, `${position(i, row.length)}, ${widthText(b.width)}`, page)
+        const [first, ...rest] = blockLines(b, project, `${position(i, row.length)}, ${widthText(b.w, fw)}`, page)
         out.push(`   - ${first}`, ...rest.map(l => '     ' + l))
       })
     }
@@ -216,7 +205,7 @@ const sameLayout = (a: Block[], b: Block[]) =>
   a.every((x, i) => {
     const y = b[i]
     return x.kind === y.kind && x.componentId === y.componentId && x.elementPath === y.elementPath && x.placeholder === y.placeholder &&
-      Math.abs(x.width - y.width) < 0.01 && !x.tree && !x.notes.trim() && !x.height
+      Math.abs(x.x - y.x) < 0.5 && Math.abs(x.y - y.y) < 0.5 && Math.abs(x.w - y.w) < 0.5 && !x.tree && !x.notes.trim() && !x.height
   })
 
 function brandLines(tokens: BrandToken[]): string[] {
@@ -249,8 +238,9 @@ function stackLine(project: Project): string {
   return parts.join(' · ')
 }
 
-/** The full Markdown brief for a coding agent. */
-export function buildPrompt(project: Project): string {
+/** The full Markdown brief for a coding agent. `measured`: preview heights by block id, for grouping rows. */
+export function buildPrompt(project: Project, measured: Record<string, number> = {}): string {
+  const heightOf = heightFrom(measured)
   const L: string[] = []
   const pages = project.pages.filter(p => p.blocks.length || p.notes.trim())
 
@@ -296,7 +286,7 @@ export function buildPrompt(project: Project): string {
       L.push('No layout changes on this page.', '')
       return
     }
-    L.push('### Target layout (top to bottom)', '', ...layoutLines(page.blocks, project, page), '')
+    L.push('### Target layout (top to bottom)', '', ...layoutLines(project, page, heightOf), '')
     if (page.original) L.push('### Current layout (for comparison)', '', ...currentLines(page.original, project), '')
   })
 

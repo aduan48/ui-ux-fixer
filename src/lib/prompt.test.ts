@@ -5,7 +5,7 @@ import { describe, expect, it } from 'vitest'
 import type { Block, Page, Project } from '../types'
 import { buildCurrentPages } from './currentPages'
 import { isImage, isWanted } from './files'
-import { buildPrompt, rowsOf } from './prompt'
+import { buildPrompt } from './prompt'
 import { scanProject } from './scan'
 import { moveNode } from './treeEdit'
 
@@ -23,8 +23,8 @@ function sketchedProject(): Project {
   const scan = scanProject(readSample('sample-react-app'))
   let n = 0
   const pages: Page[] = buildCurrentPages(scan.components).map(c => {
-    const blocks: Block[] = c.blocks.map(item => ({ id: `b${n++}`, width: 100, notes: '', ...item }))
-    return { id: c.name, name: c.name, notes: '', blocks, original: blocks, route: c.route, componentId: c.componentId }
+    const blocks: Block[] = c.blocks.map(item => ({ id: `b${n++}`, x: 0, y: 0, w: 1440, notes: '', ...item }))
+    return { id: c.name, name: c.name, notes: '', flow: true, blocks, original: blocks, route: c.route, componentId: c.componentId }
   })
   const home = pages[0]
   const name = (b: Block) => scan.components.find(c => c.id === b.componentId)?.name
@@ -32,8 +32,8 @@ function sketchedProject(): Project {
   const heroTree = scan.components.find(c => c.name === 'Hero')!.tree!
   home.blocks = [
     home.blocks[0], // Navbar
-    { ...hero, width: 50, tree: moveNode(heroTree, '3', '0', false), notes: 'make the image feel bigger' }, // image first
-    { id: 'new1', kind: 'placeholder', placeholder: 'text', width: 50, notes: 'short pitch for coaches' },
+    { ...hero, w: 720, tree: moveNode(heroTree, '3', '0', false), notes: 'make the image feel bigger' }, // image first
+    { id: 'new1', kind: 'placeholder', placeholder: 'text', x: 0, y: 0, w: 720, notes: 'short pitch for coaches' },
     ...home.blocks.filter(b => name(b) !== 'Hero' && name(b) !== 'Navbar').reverse(), // reorder the rest
   ]
   home.notes = 'convert visitors into sign-ups'
@@ -91,15 +91,8 @@ it('describes free-form moves in words, without a structure dump when only posit
   const heroTree = p.components.find(c => c.name === 'Hero')!.tree!
   hero.tree = setOffset(setOffset(heroTree, '0', { x: 40, y: -24 }), '2', { x: 0, y: 16 })
   const brief = buildPrompt(p)
-  expect(brief).toContain('**Reposition** (placed by hand in the sketch, measured on a 1280px-wide desktop layout).')
+  expect(brief).toContain('**Reposition** (placed by hand in the sketch, measured on a 1440px-wide page).')
   expect(brief).toContain('- `h1 “{title}”`: about 40px right and 24px up from where it sits now')
   expect(brief).toContain('- `button.btn-primary “{ctaLabel}”`: about 16px down from where it sits now')
   expect(brief.slice(brief.indexOf('**Hero**'), brief.indexOf('**NEW'))).not.toContain('Rearrange its contents')
 })
-
-it('groups blocks into rows the way the canvas wraps them', () => {
-  const b = (width: number) => ({ id: String(width), kind: 'placeholder', placeholder: 'text', width, notes: '' }) as Block
-  expect(rowsOf([b(100), b(50), b(50), b(100 / 3), b(100 / 3), b(100 / 3), b(75), b(50)]).map(r => r.length)).toEqual([1, 2, 3, 1, 1])
-})
-
-

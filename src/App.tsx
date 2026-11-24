@@ -1,10 +1,9 @@
 import {
-  DndContext, DragOverlay, KeyboardSensor, PointerSensor, closestCenter, pointerWithin, useSensor, useSensors,
+  DndContext, DragOverlay, KeyboardSensor, PointerSensor, pointerWithin, rectIntersection, useSensor, useSensors,
   type CollisionDetection, type DragEndEvent, type DragStartEvent,
 } from '@dnd-kit/core'
-import { sortableKeyboardCoordinates } from '@dnd-kit/sortable'
 import { useEffect, useState } from 'react'
-import { Canvas, CANVAS_DROP_ID } from './components/Canvas'
+import { Canvas, toPagePoint } from './components/Canvas'
 import { ComponentBank } from './components/ComponentBank'
 import { HeaderActions } from './components/HeaderActions'
 import { RightPanel } from './components/RightPanel'
@@ -16,18 +15,8 @@ import type { BankItem } from './types'
 const bankItemOf = (e: { active: { data: { current?: Record<string, unknown> } } }) =>
   e.active.data.current?.bankItem as BankItem | undefined
 
-/**
- * Bank drags: only count a drop when the pointer is actually over the canvas, preferring
- * the block under it (insert before that block). Reorders: snap to the nearest block.
- */
-const collision: CollisionDetection = args => {
-  const blocks = args.droppableContainers.filter(c => c.id !== CANVAS_DROP_ID)
-  if (!args.active.data.current?.bankItem) return closestCenter({ ...args, droppableContainers: blocks })
-  if (!args.pointerCoordinates) return closestCenter(args) // keyboard drag
-  const hits = pointerWithin(args)
-  const block = hits.find(h => h.id !== CANVAS_DROP_ID)
-  return block ? [block] : hits
-}
+/** A bank drop counts only with the pointer over the canvas; keyboard drags have no pointer. */
+const collision: CollisionDetection = args => (args.pointerCoordinates ? pointerWithin(args) : rectIntersection(args))
 
 /** The store loads from IndexedDB asynchronously; render nothing until it has. */
 function useHydrated() {
@@ -43,24 +32,18 @@ export default function App() {
   const [importing, setImporting] = useState(false)
   const sensors = useSensors(
     useSensor(PointerSensor, { activationConstraint: { distance: 4 } }), // lets clicks select
-    useSensor(KeyboardSensor, { coordinateGetter: sortableKeyboardCoordinates }),
+    useSensor(KeyboardSensor),
   )
 
   const onDragStart = (e: DragStartEvent) => setDragging(bankItemOf(e) ?? null)
 
+  // The only drop target is the canvas; the block's top-left lands where the drag ghost's top-left is.
   const onDragEnd = (e: DragEndEvent) => {
     setDragging(null)
-    const { over, active } = e
-    if (!over) return
-    const { project, activePageId, addBlock, moveBlock } = useStore.getState()
-    const blocks = project.pages.find(p => p.id === activePageId)!.blocks
-    const overIndex = blocks.findIndex(b => b.id === over.id)
-
     const item = bankItemOf(e)
-    if (item) return addBlock(item, overIndex === -1 ? undefined : overIndex)
-
-    const from = blocks.findIndex(b => b.id === active.id)
-    if (from !== -1 && overIndex !== -1 && from !== overIndex) moveBlock(from, overIndex)
+    const rect = e.active.rect.current.translated
+    if (!e.over || !item || !rect) return
+    useStore.getState().addBlock(item, toPagePoint(rect.left, rect.top))
   }
 
   if (!hydrated) return null
