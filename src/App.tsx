@@ -1,0 +1,102 @@
+import {
+  DndContext, DragOverlay, KeyboardSensor, PointerSensor, closestCenter, pointerWithin, useSensor, useSensors,
+  type CollisionDetection, type DragEndEvent, type DragStartEvent,
+} from '@dnd-kit/core'
+import { sortableKeyboardCoordinates } from '@dnd-kit/sortable'
+import { Upload } from 'lucide-react'
+import { useState } from 'react'
+import { Canvas, CANVAS_DROP_ID } from './components/Canvas'
+import { ComponentBank } from './components/ComponentBank'
+import { ImportDialog } from './components/ImportDialog'
+import { NotesPanel } from './components/NotesPanel'
+import { placeholderMeta } from './lib/catalog'
+import { useStore } from './store'
+import type { BankItem } from './types'
+
+const bankItemOf = (e: { active: { data: { current?: Record<string, unknown> } } }) =>
+  e.active.data.current?.bankItem as BankItem | undefined
+
+/**
+ * Bank drags: only count a drop when the pointer is actually over the canvas, preferring
+ * the block under it (insert before that block). Reorders: snap to the nearest block.
+ */
+const collision: CollisionDetection = args => {
+  const blocks = args.droppableContainers.filter(c => c.id !== CANVAS_DROP_ID)
+  if (!args.active.data.current?.bankItem) return closestCenter({ ...args, droppableContainers: blocks })
+  if (!args.pointerCoordinates) return closestCenter(args) // keyboard drag
+  const hits = pointerWithin(args)
+  const block = hits.find(h => h.id !== CANVAS_DROP_ID)
+  return block ? [block] : hits
+}
+
+export default function App() {
+  const projectName = useStore(s => s.project.name)
+  const [dragging, setDragging] = useState<BankItem | null>(null)
+  const [importing, setImporting] = useState(false)
+  const sensors = useSensors(
+    useSensor(PointerSensor, { activationConstraint: { distance: 4 } }), // lets clicks select
+    useSensor(KeyboardSensor, { coordinateGetter: sortableKeyboardCoordinates }),
+  )
+
+  const onDragStart = (e: DragStartEvent) => setDragging(bankItemOf(e) ?? null)
+
+  const onDragEnd = (e: DragEndEvent) => {
+    setDragging(null)
+    const { over, active } = e
+    if (!over) return
+    const { project, activePageId, addBlock, moveBlock } = useStore.getState()
+    const blocks = project.pages.find(p => p.id === activePageId)!.blocks
+    const overIndex = blocks.findIndex(b => b.id === over.id)
+
+    const item = bankItemOf(e)
+    if (item) return addBlock(item, overIndex === -1 ? undefined : overIndex)
+
+    const from = blocks.findIndex(b => b.id === active.id)
+    if (from !== -1 && overIndex !== -1 && from !== overIndex) moveBlock(from, overIndex)
+  }
+
+  return (
+    <div className="flex h-screen flex-col text-neutral-900">
+      <header className="flex h-11 shrink-0 items-center gap-3 border-b border-neutral-200 bg-white px-4">
+        <span className="text-sm font-semibold tracking-tight">SketchKit</span>
+        <span className="text-neutral-300">/</span>
+        <input
+          value={projectName}
+          onChange={e => useStore.getState().setProjectName(e.target.value)}
+          aria-label="Project name"
+          className="w-64 rounded px-1.5 py-0.5 text-sm text-neutral-600 hover:bg-neutral-100 focus:bg-white focus:outline-2 focus:outline-blue-500"
+        />
+        <button
+          onClick={() => setImporting(true)}
+          className="ml-auto flex items-center gap-1.5 rounded-md border border-neutral-200 px-2.5 py-1 text-[13px] font-medium text-neutral-700 hover:bg-neutral-50"
+        >
+          <Upload className="size-3.5" /> Import
+        </button>
+      </header>
+      {importing && <ImportDialog onClose={() => setImporting(false)} />}
+
+      <DndContext sensors={sensors} collisionDetection={collision} onDragStart={onDragStart} onDragEnd={onDragEnd} onDragCancel={() => setDragging(null)}>
+        <div className="flex min-h-0 flex-1">
+          <ComponentBank onImport={() => setImporting(true)} />
+          <Canvas />
+          <aside className="w-72 shrink-0 overflow-y-auto border-l border-neutral-200 bg-neutral-50/60">
+            <NotesPanel />
+          </aside>
+        </div>
+        <DragOverlay dropAnimation={null}>
+          {dragging && <DragGhost item={dragging} />}
+        </DragOverlay>
+      </DndContext>
+    </div>
+  )
+}
+
+function DragGhost({ item }: { item: BankItem }) {
+  const component = useStore(s => item.kind === 'component' ? s.project.components.find(c => c.id === item.componentId) : undefined)
+  const label = item.kind === 'placeholder' ? placeholderMeta(item.placeholder).label : component?.name
+  return (
+    <div className="w-48 cursor-grabbing rounded-md border border-blue-400 bg-white px-3 py-2 text-[13px] font-medium shadow-lg">
+      {label}
+    </div>
+  )
+}
