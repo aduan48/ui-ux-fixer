@@ -1,5 +1,6 @@
 import type { Block, BrandToken, Page, PlaceholderType, Project, StaticNode, TokenKind, TokenRole } from '../types'
 import { blockNode, labelAt } from './render'
+import { withoutOffsets } from './treeEdit'
 
 // The brief is written for a coding agent (Claude Code etc.): concrete file paths, explicit
 // "reuse" vs "build new", brand values as rules, and what changed compared to today.
@@ -99,6 +100,30 @@ function removedLeaves(before: StaticNode, after: StaticNode): string[] {
   })
 }
 
+/** Every free-form move in a tree, as [label, offset]. */
+function offsetsIn(tree: StaticNode): [string, { x: number; y: number }][] {
+  const out: [string, { x: number; y: number }][] = []
+  const visit = (n: StaticNode, path: string) => {
+    if (!('children' in n)) return
+    n.children.forEach((c, i) => {
+      const p = path ? `${path}.${i}` : String(i)
+      if ((c.t === 'el' || c.t === 'comp') && c.offset) out.push([labelAt(tree, p)!.label, c.offset])
+      visit(c, p)
+    })
+  }
+  visit(tree, '')
+  return out
+}
+
+/** "about 40px right and 24px up". */
+function moveText({ x, y }: { x: number; y: number }): string {
+  const parts = [
+    x ? `${Math.abs(x)}px ${x > 0 ? 'right' : 'left'}` : '',
+    y ? `${Math.abs(y)}px ${y > 0 ? 'down' : 'up'}` : '',
+  ].filter(Boolean)
+  return `about ${parts.join(' and ')}`
+}
+
 interface Described {
   title: string
   file?: string
@@ -138,13 +163,22 @@ function blockLines(block: Block, project: Project, where: string, page: Page): 
   if (block.props && Object.keys(block.props).length)
     sub.push(`Props it gets today: ${Object.entries(block.props).map(([k, v]) => `${k}=${code(v.replace(/^@asset:/, ''))}`).join(', ')}`)
   if (block.tree) {
-    const original = block.kind === 'element' ? undefined : project.components.find(c => c.id === block.componentId)?.tree
-    const source = block.kind === 'element' ? blockNode({ ...block, tree: undefined }, project.components) : original
-    sub.push('**Rearrange its contents** to this structure (top to bottom):', ...outline(block.tree).map(l => '  ' + l))
-    if (source) {
-      const removed = removedLeaves(source, block.tree)
-      if (removed.length) sub.push(`Remove: ${removed.join(', ')}`)
-      sub.push('Current structure, for comparison:', ...outline(source).map(l => '  ' + l))
+    const source = blockNode({ ...block, tree: undefined }, project.components)
+    const restructured = !source || JSON.stringify(withoutOffsets(source)) !== JSON.stringify(withoutOffsets(block.tree))
+    if (restructured) {
+      sub.push('**Rearrange its contents** to this structure (top to bottom):', ...outline(block.tree).map(l => '  ' + l))
+      if (source) {
+        const removed = removedLeaves(source, block.tree)
+        if (removed.length) sub.push(`Remove: ${removed.join(', ')}`)
+        sub.push('Current structure, for comparison:', ...outline(source).map(l => '  ' + l))
+      }
+    }
+    const moves = offsetsIn(block.tree)
+    if (moves.length) {
+      sub.push(
+        '**Reposition** (placed by hand in the sketch, measured on a 1280px-wide desktop layout). Get there with real layout: alignment, spacing, grid/flex, not hard-coded offsets:',
+        ...moves.map(([label, o]) => `  - ${code(label)}: ${moveText(o)} from where it sits now`),
+      )
     }
   }
   if (block.height) sub.push('Its height was set by hand in the sketch: make it noticeably more compact or taller to match, rather than sizing to content.')

@@ -37,6 +37,7 @@ export function useBlockTitle(block: Block | undefined) {
 export function BlockCard({ block }: { block: Block }) {
   const selected = useStore(s => s.selectedBlockId === block.id)
   const editing = useStore(s => s.editingBlockId === block.id)
+  const editMode = useStore(s => s.editMode)
   const components = useStore(s => s.project.components)
   const assets = useStore(s => s.project.assets)
   const { selectBlock, updateBlock, deleteBlock, startEditing, stopEditing, resetBlockTree } = useStore.getState()
@@ -126,7 +127,10 @@ export function BlockCard({ block }: { block: Block }) {
       <div onClick={e => e.stopPropagation()} className={`absolute top-1 right-1 items-center gap-0.5 rounded-md border border-neutral-200 bg-white p-0.5 shadow-sm ${chrome}`}>
         {editing ? (
           <>
-            <span className="px-1.5 text-[11px] text-neutral-500">Drag elements to move · Del removes</span>
+            <EditModeToggle />
+            <span className="hidden px-1.5 text-[11px] text-neutral-500 xl:inline">
+              {editMode === 'free' ? 'Drag anywhere · Shift locks direction · double-click resets' : 'Drag into place in the layout'} · Del removes
+            </span>
             {block.tree && <ToolButton onClick={() => resetBlockTree(block.id)} icon={RotateCcw} label="Reset" />}
             <ToolButton onClick={stopEditing} icon={Check} label="Done" primary />
           </>
@@ -189,6 +193,29 @@ export function BlockCard({ block }: { block: Block }) {
           {widthLabel(block.width)}{block.height ? ` × ${block.height}px` : ''}
         </div>
       )}
+    </div>
+  )
+}
+
+function EditModeToggle() {
+  const mode = useStore(s => s.editMode)
+  const modes = [
+    { id: 'free', label: 'Free move' },
+    { id: 'reorder', label: 'Reorder' },
+  ] as const
+  return (
+    <div role="radiogroup" aria-label="Drag mode" className="flex rounded bg-neutral-100 p-0.5">
+      {modes.map(m => (
+        <button
+          key={m.id}
+          role="radio"
+          aria-checked={mode === m.id}
+          onClick={() => useStore.getState().setEditMode(m.id)}
+          className={`rounded px-1.5 py-0.5 text-[11px] font-medium ${mode === m.id ? 'bg-white text-violet-700 shadow-sm' : 'text-neutral-500 hover:text-neutral-800'}`}
+        >
+          {m.label}
+        </button>
+      ))}
     </div>
   )
 }

@@ -84,6 +84,19 @@ it('lists removed pieces, not containers whose children were merely reordered', 
   expect(brief).not.toContain('Remove: section')
 })
 
+it('describes free-form moves in words, without a structure dump when only positions changed', async () => {
+  const { setOffset } = await import('./treeEdit')
+  const p = sketchedProject()
+  const hero = p.pages[0].blocks[1]
+  const heroTree = p.components.find(c => c.name === 'Hero')!.tree!
+  hero.tree = setOffset(setOffset(heroTree, '0', { x: 40, y: -24 }), '2', { x: 0, y: 16 })
+  const brief = buildPrompt(p)
+  expect(brief).toContain('**Reposition** (placed by hand in the sketch, measured on a 1280px-wide desktop layout).')
+  expect(brief).toContain('- `h1 “{title}”`: about 40px right and 24px up from where it sits now')
+  expect(brief).toContain('- `button.btn-primary “{ctaLabel}”`: about 16px down from where it sits now')
+  expect(brief.slice(brief.indexOf('**Hero**'), brief.indexOf('**NEW'))).not.toContain('Rearrange its contents')
+})
+
 it('groups blocks into rows the way the canvas wraps them', () => {
   const b = (width: number) => ({ id: String(width), kind: 'placeholder', placeholder: 'text', width, notes: '' }) as Block
   expect(rowsOf([b(100), b(50), b(50), b(100 / 3), b(100 / 3), b(100 / 3), b(75), b(50)]).map(r => r.length)).toEqual([1, 2, 3, 1, 1])

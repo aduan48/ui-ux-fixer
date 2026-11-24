@@ -1,14 +1,14 @@
 import { ArrowDown, ArrowUp, RotateCcw, Trash2 } from 'lucide-react'
 import { elementIcon } from '../lib/catalog'
 import { blockNode, labelAt } from '../lib/render'
-import { nudgeNode, removeNode } from '../lib/treeEdit'
+import { nudgeNode, removeNode, setOffset } from '../lib/treeEdit'
 import { useStore } from '../store'
 import type { Block, StaticNode } from '../types'
 
 const MAX_ROWS = 200
 const MAX_DEPTH = 8
 
-interface Row { path: string; depth: number; tag: string; label: string; first: boolean; last: boolean }
+interface Row { path: string; depth: number; tag: string; label: string; first: boolean; last: boolean; moved: boolean }
 
 /** Element and component nodes under the root, depth first (text and {expressions} are left out). */
 function rowsOf(tree: StaticNode): Row[] {
@@ -20,7 +20,8 @@ function rowsOf(tree: StaticNode): Row[] {
       if (rows.length >= MAX_ROWS) return
       const p = path ? `${path}.${i}` : String(i)
       const info = labelAt(tree, p)!
-      rows.push({ path: p, depth, tag: info.tag, label: info.label, first: k === 0, last: k === kids.length - 1 })
+      const moved = (c.t === 'el' || c.t === 'comp') && !!c.offset
+      rows.push({ path: p, depth, tag: info.tag, label: info.label, first: k === 0, last: k === kids.length - 1, moved })
       if (c.t !== 'comp') visit(c, p, depth + 1) // a nested component moves as one piece
     })
   }
@@ -67,8 +68,10 @@ export function Layers({ block }: { block: Block }) {
                 <button onClick={() => pick(r.path)} className="flex min-w-0 flex-1 items-center gap-1.5 py-1 text-left">
                   <Icon className="size-3.5 shrink-0 text-neutral-400" />
                   <span className="truncate">{r.label}</span>
+                  {r.moved && <span className="shrink-0 rounded bg-violet-100 px-1 text-[10px] font-medium text-violet-700">moved</span>}
                 </button>
                 <span className={`items-center ${on ? 'flex' : 'hidden group-hover:flex'}`}>
+                  {r.moved && <IconButton label="Put back in place" icon={RotateCcw} onClick={() => edit(t => setOffset(t, r.path, undefined))} />}
                   <IconButton label="Move up" icon={ArrowUp} disabled={r.first} onClick={() => edit(t => nudgeNode(t, r.path, -1))} />
                   <IconButton label="Move down" icon={ArrowDown} disabled={r.last} onClick={() => edit(t => nudgeNode(t, r.path, 1))} />
                   <IconButton label="Remove" icon={Trash2} danger onClick={() => edit(t => removeNode(t, r.path))} />

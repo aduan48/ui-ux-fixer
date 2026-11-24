@@ -34,6 +34,8 @@ interface State {
   /** Block whose inside is being rearranged in its preview, and the element picked in it. */
   editingBlockId: string | null
   selectedElementPath: string | null
+  /** How dragging inside a block works: place freely (offset) or reorder in the layout. */
+  editMode: 'free' | 'reorder'
 
   setProjectName: (name: string) => void
   setGlobalNotes: (notes: string) => void
@@ -67,6 +69,7 @@ interface State {
 
   startEditing: (blockId: string) => void
   stopEditing: () => void
+  setEditMode: (mode: State['editMode']) => void
   selectElement: (path: string | null) => void
   /** Apply an edit to a block's own copy of its markup (made from the scanned tree on first edit). */
   editBlockTree: (blockId: string, fn: (tree: StaticNode) => StaticNode) => void
@@ -118,6 +121,7 @@ export const useStore = create<State>()(
         selectedBlockId: null,
         editingBlockId: null,
         selectedElementPath: null,
+        editMode: 'free',
 
         setProjectName: name => set(s => ({ project: { ...s.project, name } })),
         setGlobalNotes: globalNotes => set(s => ({ project: { ...s.project, globalNotes } })),
@@ -214,12 +218,17 @@ export const useStore = create<State>()(
 
         startEditing: blockId => set({ selectedBlockId: blockId, editingBlockId: blockId, selectedElementPath: null }),
         stopEditing: () => set({ editingBlockId: null, selectedElementPath: null }),
+        setEditMode: editMode => set({ editMode }),
         selectElement: selectedElementPath => set({ selectedElementPath }),
         editBlockTree: (blockId, fn) => {
           const { project } = get()
           const block = project.pages.flatMap(p => p.blocks).find(b => b.id === blockId)
           const tree = block && blockNode(block, project.components)
-          if (tree) get().updateBlock(blockId, { tree: fn(tree) })
+          if (!block || !tree) return
+          const next = fn(tree)
+          // Back to exactly the scanned markup (e.g. a moved element double-clicked home): drop the copy.
+          const original = blockNode({ ...block, tree: undefined }, project.components)
+          get().updateBlock(blockId, { tree: JSON.stringify(next) === JSON.stringify(original) ? undefined : next })
         },
         resetBlockTree: blockId => {
           get().updateBlock(blockId, { tree: undefined })

@@ -10,12 +10,18 @@ export type PlaceholderType = 'text' | 'image' | 'button' | 'spacer' | 'columns'
  * one item and a ternary keeps its first branch.
  */
 export type StaticNode =
-  | { t: 'el'; tag: string; cls?: string; attrs?: Record<string, string>; children: StaticNode[] }
+  | { t: 'el'; tag: string; cls?: string; attrs?: Record<string, string>; children: StaticNode[]; offset?: Offset }
   // Another component. Resolved at render time by import (src + imp) when known, else by name.
-  | { t: 'comp'; name: string; src?: string; imp?: string; attrs?: Record<string, string>; children: StaticNode[] }
+  | { t: 'comp'; name: string; src?: string; imp?: string; attrs?: Record<string, string>; children: StaticNode[]; offset?: Offset }
   | { t: 'frag'; children: StaticNode[] }
   | { t: 'text'; v: string }
   | { t: 'expr'; v: string }
+
+/** A free-form move in the sketch: shift from where the element sits in the layout, in page pixels. */
+export interface Offset {
+  x: number
+  y: number
+}
 
 export interface ScannedComponent {
   id: string

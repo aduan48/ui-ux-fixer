@@ -1,4 +1,4 @@
-import type { StaticNode } from '../types'
+import type { Offset, StaticNode } from '../types'
 
 // Paths are child-index paths ("0.2.1") over `children`, the same ones nodeAt() reads.
 // Every edit returns a new tree; the input is never mutated.
@@ -60,4 +60,25 @@ export function nudgeNode(tree: StaticNode, path: string, dir: -1 | 1): StaticNo
   const j = i + dir
   if (!parent || j < 0 || j >= kids(parent).length) return tree
   return moveNode(tree, path, [...p.slice(0, -1), j].join('.'), dir > 0)
+}
+
+/** Set (or with undefined/0,0 clear) the free-form offset of the node at `path`. */
+export function setOffset(tree: StaticNode, path: string, offset: Offset | undefined): StaticNode {
+  const p = split(path)
+  const clear = !offset || (offset.x === 0 && offset.y === 0)
+  const apply = (n: StaticNode): StaticNode => {
+    if (n.t !== 'el' && n.t !== 'comp') return n
+    const { offset: _old, ...rest } = n
+    return clear ? rest : { ...rest, offset: { x: Math.round(offset!.x), y: Math.round(offset!.y) } }
+  }
+  if (!p.length) return tree
+  const i = p.pop()!
+  return update(tree, p, children => children.map((c, j) => (j === i ? apply(c) : c)))
+}
+
+/** The same tree with every offset removed: its structure only. */
+export function withoutOffsets(n: StaticNode): StaticNode {
+  if (n.t !== 'el' && n.t !== 'comp' && n.t !== 'frag') return n
+  const { offset: _o, ...rest } = n as StaticNode & { offset?: Offset }
+  return { ...rest, children: n.children.map(withoutOffsets) } as StaticNode
 }

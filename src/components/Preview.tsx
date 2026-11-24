@@ -2,7 +2,7 @@ import tailwindBrowser from '@tailwindcss/browser?url'
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { previewDoc, VIEWPORT_HEIGHT } from '../lib/render'
 import { backdropColor } from '../lib/color'
-import { moveInto, moveNode, removeNode } from '../lib/treeEdit'
+import { moveInto, moveNode, removeNode, setOffset } from '../lib/treeEdit'
 import { useStore } from '../store'
 
 /** Desktop width the page is rendered at; each block gets its share, then is scaled to fit. */
@@ -17,6 +17,7 @@ export function Preview({ blockId, html, blockWidth, editable }: { blockId: stri
   const styles = useStore(s => s.project.styles)
   const backdrop = useStore(s => backdropColor(s.project.tokens))
   const selected = useStore(s => (editable ? s.selectedElementPath : null))
+  const editMode = useStore(s => s.editMode)
   const doc = useMemo(() => previewDoc(html, styles, tailwindUrl, { editable, backdrop }), [html, styles, editable, backdrop])
 
   const frameRef = useRef<HTMLIFrameElement>(null)
@@ -27,7 +28,7 @@ export function Preview({ blockId, html, blockWidth, editable }: { blockId: stri
   useEffect(() => {
     const onMessage = (e: MessageEvent) => {
       if (e.source !== frameRef.current?.contentWindow || typeof e.data !== 'object' || !e.data) return
-      const { skHeight, skSelect, skMove, skMoveInto, skDelete, skDone } = e.data
+      const { skHeight, skSelect, skMove, skMoveInto, skOffset, skDelete, skDone } = e.data
       const store = useStore.getState()
       if (typeof skHeight === 'number') {
         const h = Math.min(MAX_HEIGHT, Math.max(24, skHeight))
@@ -43,6 +44,8 @@ export function Preview({ blockId, html, blockWidth, editable }: { blockId: stri
         store.editBlockTree(blockId, t => moveInto(t, skMoveInto.from, skMoveInto.parent))
         store.selectElement(null)
       }
+      if (skOffset && typeof skOffset.path === 'string' && Number.isFinite(skOffset.x) && Number.isFinite(skOffset.y))
+        store.editBlockTree(blockId, t => setOffset(t, skOffset.path, { x: skOffset.x, y: skOffset.y }))
       if (typeof skDelete === 'string') {
         store.editBlockTree(blockId, t => removeNode(t, skDelete))
         store.selectElement(null)
@@ -55,8 +58,9 @@ export function Preview({ blockId, html, blockWidth, editable }: { blockId: stri
     return () => { removeEventListener('message', onMessage); ro.disconnect() }
   }, [blockId])
 
-  const showSelection = () => frameRef.current?.contentWindow?.postMessage({ skShow: selected }, '*')
-  useEffect(showSelection, [selected])
+  // The editor in the frame learns the selection and drag mode by message (no reload needed).
+  const showSelection = () => frameRef.current?.contentWindow?.postMessage({ skShow: selected, skMode: editMode }, '*')
+  useEffect(showSelection, [selected, editMode])
 
   const virtualWidth = (PAGE_WIDTH * blockWidth) / 100
   const scale = boxWidth ? boxWidth / virtualWidth : 0

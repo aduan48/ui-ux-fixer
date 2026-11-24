@@ -193,6 +193,14 @@ describe('tree edits', () => {
     expect(moveInto(hero, '2', '2.0')).toBe(hero)
   })
 
+  it('sets and clears free-form offsets without touching structure', async () => {
+    const { setOffset, withoutOffsets } = await import('./treeEdit')
+    const moved = setOffset(hero, '2.1', { x: 12.4, y: -8 })
+    expect((moved as { children: { children: { offset?: unknown }[] }[] }).children[2].children[1].offset).toEqual({ x: 12, y: -8 })
+    expect(withoutOffsets(moved)).toEqual(withoutOffsets(hero))
+    expect(setOffset(moved, '2.1', { x: 0, y: 0 })).toEqual(hero)
+  })
+
   it('nudges and removes', () => {
     expect(tags(nudgeNode(hero, '1', -1))).toBe('section(p,h1,div(button,a))')
     expect(nudgeNode(hero, '0', -1)).toBe(hero)

@@ -1,4 +1,4 @@
-import type { Block, ScannedComponent, SourceFile, StaticNode } from '../types'
+import type { Block, Offset, ScannedComponent, SourceFile, StaticNode } from '../types'
 
 // ---------- Inner elements ----------
 
@@ -117,11 +117,18 @@ interface Ctx {
   slot?: () => string // the parent's children, for {children}
   /** data-sk path for the root element this call renders (a component placed in the edited tree). */
   mark?: string
+  /** Free-form offset for that root element (a moved component). */
+  offset?: Offset
 }
 
 /** Attribute string for an element, with images resolved and links neutralised. */
-function attrsOf(n: { cls?: string; attrs?: Record<string, string> }, tag: string, ctx: Ctx, mark?: string): string {
+/** A free-form move: shift visually without disturbing the layout around it. */
+const offsetCss = (o?: Offset) => (o ? `translate:${o.x}px ${o.y}px;position:relative;z-index:1` : '')
+
+function attrsOf(n: { cls?: string; attrs?: Record<string, string> }, tag: string, ctx: Ctx, mark?: string, offset?: Offset): string {
   let out = n.cls ? ` class="${esc(n.cls)}"` : ''
+  const shift = offsetCss(offset)
+  if (shift && !n.attrs?.style) out += ` style="${shift}"`
   for (const [k, raw] of Object.entries(n.attrs ?? {})) {
     if (/^on/i.test(k)) continue
     // "@expr:logoSrc" = a dynamic value; fill it from the props the parent passed, if any.
@@ -129,7 +136,8 @@ function attrsOf(n: { cls?: string; attrs?: Record<string, string> }, tag: strin
     if (k === 'href' || k === 'xlinkHref') out += ` ${attrName(k)}="${v.startsWith('#') && tag === 'use' ? esc(v) : '#'}"` // previews never navigate
     else if (k === 'src' || k === 'poster') out += ` ${k}="${esc(imageUrl(v, ctx))}"`
     else if (k === 'srcSet') continue // may point at files we don't have; src is enough
-    else out += ` ${attrName(k)}="${esc(k === 'style' ? fixVh(v) : v)}"`
+    else if (k === 'style') out += ` style="${esc([fixVh(v), shift].filter(Boolean).join(';'))}"`
+    else out += ` ${attrName(k)}="${esc(v)}"`
   }
   if (tag === 'img' && !n.attrs?.src) out += ` src="${PLACEHOLDER_IMG}"`
   if (mark) out += ` data-sk="${mark}"`
@@ -160,20 +168,23 @@ function render(n: StaticNode, ctx: Ctx, path?: string): string {
       const mark = path ? path : ctx.mark
       // <Routes>: only the first route renders, like in the browser.
       const kids = ROUTER_SWITCH.has(n.name) ? n.children.slice(0, 1) : n.children
-      const slot = () => kids.map(child).join('')
+      // `offset` is for wrappers with no element of their own (<Link>): their children carry the move.
+      const slot = (offset?: Offset) =>
+        kids.map((c, i) => render(c, offset ? { ...ctx, offset } : ctx, path === undefined ? undefined : path ? `${path}.${i}` : String(i))).join('')
       if (target?.tree && ctx.depth <= 8) // depth cap guards against components that render themselves
-        return render(target.tree, { ...ctx, depth: ctx.depth + 1, props: n.attrs, slot, mark })
+        return render(target.tree, { ...ctx, depth: ctx.depth + 1, props: n.attrs, slot, mark, offset: n.offset ?? ctx.offset })
       // Not in the project (Router, ThemeProvider, MUI…): show its children, or a small labelled stub.
-      if (kids.length) return slot()
-      return `<span class="sk-missing"${mark ? ` data-sk="${mark}"` : ''}>${esc(n.name)}</span>`
+      if (kids.length) return slot(n.offset)
+      const shift = offsetCss(n.offset)
+      return `<span class="sk-missing"${mark ? ` data-sk="${mark}"` : ''}${shift ? ` style="${shift}"` : ''}>${esc(n.name)}</span>`
     }
     case 'el': {
       if (DROPPED.has(n.tag)) return ''
       if (TRANSPARENT.has(n.tag)) return n.children.map(child).join('')
       const tag = /^[a-zA-Z][a-zA-Z0-9-]*$/.test(n.tag) ? n.tag : 'div'
       const mark = path ? path : ctx.mark
-      const inner = { ...ctx, mark: undefined }
-      const attrs = attrsOf(n, tag, ctx, mark)
+      const inner = { ...ctx, mark: undefined, offset: undefined }
+      const attrs = attrsOf(n, tag, ctx, mark, n.offset ?? ctx.offset)
       if (VOID.has(tag)) return `<${tag}${attrs}>`
       const kids = n.children.map((c, i) => render(c, inner, path === undefined ? undefined : path ? `${path}.${i}` : String(i)))
       return `<${tag}${attrs}>${kids.join('')}</${tag}>`
@@ -261,7 +272,16 @@ const EDITOR_SCRIPT = `(() => {
   const post = m => parent.postMessage(m, '*')
   // A custom tag, so the site's own \`div { … }\` rules can never style our overlays.
   const mk = c => { const d = document.createElement('sk-box'); d.className = c; document.documentElement.append(d); return d }
-  const hover = mk('sk-hover'), sel = mk('sk-sel'), line = mk('sk-line'), into = mk('sk-into')
+  const hover = mk('sk-hover'), sel = mk('sk-sel'), line = mk('sk-line'), into = mk('sk-into'), tip = mk('sk-tip')
+  // 'free': drag to any position (stored as an offset). 'reorder': drag into a slot in the layout.
+  let mode = 'free'
+  const SNAP = 4
+  const translateOf = el => {
+    const t = getComputedStyle(el).translate
+    if (!t || t === 'none') return [0, 0]
+    const [x = 0, y = 0] = t.split(' ').map(parseFloat)
+    return [x, y]
+  }
   const place = (b, el) => {
     if (!el) return (b.style.display = 'none')
     const r = el.getBoundingClientRect()
@@ -345,7 +365,9 @@ const EDITOR_SCRIPT = `(() => {
   new ResizeObserver(() => place(sel, selected)).observe(document.body)
   // The app tells us what's selected (e.g. picked in the layers panel).
   addEventListener('message', e => {
-    if (e.source !== parent || !('skShow' in (e.data || {}))) return
+    if (e.source !== parent || !e.data) return
+    if ('skMode' in e.data) mode = e.data.skMode
+    if (!('skShow' in e.data)) return
     selected = e.data.skShow ? document.querySelector('[data-sk="' + CSS.escape(e.data.skShow) + '"]') : null
     place(sel, selected)
   })
@@ -354,10 +376,24 @@ const EDITOR_SCRIPT = `(() => {
   addEventListener('pointermove', e => {
     if (!drag) return place(hover, at(e.clientX, e.clientY))
     if (!drag.moved && Math.hypot(e.clientX - drag.x, e.clientY - drag.y) < 4) return
-    if (!drag.moved) Object.assign(drag, lift(drag.el))
+    if (!drag.moved) {
+      Object.assign(drag, lift(drag.el))
+      drag.base = translateOf(drag.el)
+    }
     drag.moved = true
-    drag.el.style.opacity = '.35'
     place(hover, null)
+    if (mode === 'free') {
+      let dx = e.clientX - drag.x, dy = e.clientY - drag.y
+      if (e.shiftKey) Math.abs(dx) > Math.abs(dy) ? (dy = 0) : (dx = 0) // lock to one direction
+      const x = Math.round((drag.base[0] + dx) / SNAP) * SNAP, y = Math.round((drag.base[1] + dy) / SNAP) * SNAP
+      Object.assign(drag.el.style, { translate: x + 'px ' + y + 'px', position: 'relative', zIndex: '1' })
+      drag.offset = { x, y }
+      place(sel, drag.el)
+      tip.textContent = (x >= 0 ? '+' : '') + x + ', ' + (y >= 0 ? '+' : '') + y
+      Object.assign(tip.style, { display: 'block', left: e.clientX + scrollX + 12 + 'px', top: e.clientY + scrollY + 12 + 'px', width: 'auto', height: 'auto' })
+      return
+    }
+    drag.el.style.opacity = '.35'
     drag.drop = dropAt(e.clientX, e.clientY, drag.el)
     line.style.display = 'none'
     place(into, drag.drop && drag.drop.into !== undefined ? drag.drop.box || document.body : null)
@@ -399,6 +435,8 @@ const EDITOR_SCRIPT = `(() => {
     d.el.style.opacity = ''
     line.style.display = 'none'
     place(into, null)
+    tip.style.display = 'none'
+    if (d.moved && mode === 'free') return d.offset && post({ skOffset: { path: d.path, ...d.offset } })
     if (d.moved) {
       const from = d.path
       if (d.drop && d.drop.into !== undefined) post({ skMoveInto: { from, parent: d.drop.into } })
@@ -410,6 +448,11 @@ const EDITOR_SCRIPT = `(() => {
     post({ skSelect: d.el.dataset.sk })
   })
   addEventListener('pointerleave', () => place(hover, null))
+  // Double-click puts a free-moved element back where the layout has it.
+  addEventListener('dblclick', e => {
+    const t = at(e.clientX, e.clientY)
+    if (t) post({ skOffset: { path: lift(t).path, x: 0, y: 0 } })
+  })
   addEventListener('keydown', e => {
     if ((e.key === 'Delete' || e.key === 'Backspace') && selected) post({ skDelete: selected.dataset.sk })
     if (e.key === 'Escape') post({ skDone: true })
@@ -497,6 +540,7 @@ ${opts.editable ? `html{-webkit-user-select:none;user-select:none}
 [data-sk]{cursor:grab}
 sk-box{all:initial;position:absolute;pointer-events:none;z-index:2147483647;display:none;box-sizing:border-box}
 .sk-into{outline:2px dashed #3b82f6;outline-offset:-2px;background:rgba(59,130,246,.12)}
+.sk-tip{background:#7c3aed;color:#fff;font:600 12px/1 ui-sans-serif,system-ui,sans-serif;padding:4px 6px;border-radius:4px;white-space:nowrap}
 .sk-hover{outline:2px dashed #3b82f6;outline-offset:-1px}
 .sk-sel{outline:2px solid #3b82f6;outline-offset:-1px;background:rgba(59,130,246,.06)}
 .sk-line{background:#3b82f6;border-radius:2px}` : ''}
