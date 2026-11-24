@@ -55,9 +55,9 @@ describe('buildPrompt', () => {
   })
 
   it('lays the page out top to bottom with real file paths, rows and NEW blocks', () => {
-    expect(prompt).toContain('Route `/`, rendered by `app/page.tsx`.')
+    expect(prompt).toContain('Route `/`, rendered by `app/page.tsx`, sketched on a 1440px desktop frame.')
     expect(prompt).toContain('1. **Navbar** (full width): reuse `src/components/Navbar.tsx`.')
-    expect(prompt).toContain('2. A row of 2, side by side:')
+    expect(prompt).toContain('2. A row of 2 equal columns, side by side, top-aligned:')
     expect(prompt).toContain('   - **Hero** (left, 6/12 width): reuse `src/components/hero/index.tsx`.')
     expect(prompt).toContain("   - **NEW: text block** (right, 6/12 width): build a text section (heading and paragraph). It doesn't exist yet.")
     expect(prompt).toContain('4. **`section “What people say”`** (full width): keep the existing markup, currently written inline in `app/page.tsx`.')
@@ -69,7 +69,7 @@ describe('buildPrompt', () => {
     expect(prompt).toContain('**Page notes:** convert visitors into sign-ups')
     expect(prompt).toContain('## Overall direction\n\nfeel more premium, mobile first')
     expect(prompt).toContain('### Current layout (for comparison)\n\n1. Navbar (`src/components/Navbar.tsx`)\n2. Hero')
-    expect(prompt).toContain('## Page 2: About\n\nRoute `/about`, rendered by `app/about/page.tsx`.\n\nNo layout changes on this page.')
+    expect(prompt).toContain('## Page 2: About\n\nRoute `/about`, rendered by `app/about/page.tsx`, sketched on a 1440px desktop frame.\n\nNo layout changes on this page.')
     expect(prompt).toContain('## New things to build\n\n- Home: a text section (heading and paragraph)')
   })
 })
@@ -95,4 +95,33 @@ it('describes free-form moves in words, without a structure dump when only posit
   expect(brief).toContain('- `h1 “{title}”`: about 40px right and 24px up from where it sits now')
   expect(brief).toContain('- `button.btn-primary “{ctaLabel}”`: about 16px down from where it sits now')
   expect(brief.slice(brief.indexOf('**Hero**'), brief.indexOf('**NEW'))).not.toContain('Rearrange its contents')
+})
+
+it('describes free positions as layout: gaps named after spacing tokens, columns, alignment', () => {
+  const p = sketchedProject()
+  p.tokens.unshift({ id: 's', kind: 'spacing', value: '2rem', name: 'spacing-8', count: 1 })
+  const ph = (id: string, x: number, y: number, w: number) => ({ id, kind: 'placeholder', placeholder: 'text', x, y, w, height: 200, notes: '' }) as Block
+  const home = p.pages[0]
+  home.flow = false
+  home.blocks = [ph('a', 0, 0, 1440), ph('b', 224, 296, 480), ph('c', 736, 296, 480)]
+  const brief = buildPrompt(p, {})
+  expect(brief).toContain('1. **NEW: text block** (full width)')
+  expect(brief).toContain('2. 96px (`6rem`) below the previous section: a row of 2 equal columns, 32px (`spacing-8`) apart, top-aligned, centered, 69% width:')
+  expect(brief).toContain('   - **NEW: text block** (left, 4/12 width)')
+})
+
+it('treats a page whose blocks were only re-stacked in z-order as unchanged', () => {
+  const p = sketchedProject()
+  const about = p.pages[1]
+  about.flow = false
+  about.blocks = [...about.blocks].reverse()
+  about.original = [...about.blocks].reverse()
+  expect(buildPrompt(p, {})).toContain('## Page 2: About\n\nRoute `/about`, rendered by `app/about/page.tsx`, sketched on a 1440px desktop frame.\n\nNo layout changes on this page.')
+})
+
+it('says how stacked items line up', () => {
+  const p = sketchedProject()
+  const ph = (id: string, x: number, y: number, w: number) => ({ id, kind: 'placeholder', placeholder: 'text', x, y, w, height: 100, notes: '' }) as Block
+  Object.assign(p.pages[0], { flow: false, blocks: [{ ...ph('a', 0, 0, 400), height: 216 }, ph('h', 600, 0, 400), ph('b', 700, 116, 200)] }) // a spans both stacked blocks
+  expect(buildPrompt(p, {})).toContain('right: stacked top to bottom, 16px (`1rem`) apart, centered:')
 })

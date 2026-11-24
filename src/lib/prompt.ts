@@ -1,6 +1,6 @@
 import type { Block, BrandToken, Page, PlaceholderType, Project, StaticNode, TokenKind, TokenRole } from '../types'
 import { blockNode, labelAt } from './render'
-import { frameWidthOf, heightFrom, placedBlocks, rowsOf } from './layout'
+import { FRAMES, frameWidthOf, heightFrom, inferLayout, placedBlocks, type Box, type Layout } from './layout'
 import { withoutOffsets } from './treeEdit'
 
 // The brief is written for a coding agent (Claude Code etc.): concrete file paths, explicit
@@ -37,6 +37,37 @@ function widthText(px: number, frameWidth: number): string {
 }
 
 const position = (i: number, n: number) => (n === 2 ? ['left', 'right'][i] : n === 3 ? ['left', 'middle', 'right'][i] : `column ${i + 1} of ${n}`)
+
+const near = (a: number, b: number) => Math.abs(a - b) <= 4
+
+/** Where a box sits across the frame, when it isn't full width: "centered", "on the left", "on the right". */
+function hAlign(box: Box, fw: number): string | undefined {
+  if (box.w >= fw - 4) return
+  const left = box.x, right = fw - box.x - box.w
+  return near(left, right) ? 'centered' : near(left, 0) ? 'on the left' : near(right, 0) ? 'on the right' : undefined
+}
+
+/** How items line up across the axis they're laid out on: a row's columns vertically, a stack's items horizontally. */
+function alignment(items: Box[], across: 'x' | 'y'): string | undefined {
+  const all = (f: (b: Box) => number) => items.every(b => near(f(b), f(items[0])))
+  if (across === 'y') return all(b => b.y) ? 'top-aligned' : all(b => b.y + b.h / 2) ? 'vertically centered' : all(b => b.y + b.h) ? 'bottom-aligned' : undefined
+  return all(b => b.x) ? 'left-aligned' : all(b => b.x + b.w / 2) ? 'centered' : all(b => b.x + b.w) ? 'right-aligned' : undefined
+}
+
+/** Spacing tokens in px, for naming gaps: `1rem` → 16. */
+function spacingScale(tokens: BrandToken[]) {
+  return tokens.flatMap(t => {
+    const m = t.kind === 'spacing' && t.value.trim().match(/^(\d*\.?\d+)(px|rem|em)?$/)
+    return m ? [{ px: Number(m[1]) * (m[2] === 'rem' || m[2] === 'em' ? 16 : 1), label: t.name?.split(' · ')[0] ?? t.value }] : []
+  })
+}
+
+/** A gap in px, named after the nearest spacing token when one is close: "32px (`spacing-8`)". */
+function gapText(px: number, scale: { px: number; label: string }[]): string {
+  const r = Math.round(px)
+  const best = scale.reduce<{ px: number; label: string } | undefined>((a, t) => (!a || Math.abs(t.px - px) < Math.abs(a.px - px) ? t : a), undefined)
+  return best && Math.abs(best.px - px) <= Math.max(2, px * 0.1) ? `${r}px (${code(best.label)})` : `${r}px`
+}
 
 /** Indented outline of the element/component structure inside a tree (text and {expressions} left out). */
 function outline(tree: StaticNode, maxDepth = 3, maxLines = 30): string[] {
@@ -174,22 +205,40 @@ function blockLines(block: Block, project: Project, where: string, page: Page): 
   return [lines[0], ...sub.map(s => (s.startsWith('  ') ? '  ' + s : `  - ${s}`))]
 }
 
+/** A sub-list item: bullet on the first line, the rest indented under it. */
+const nest = (lines: string[], bullet: string) => [bullet + lines[0], ...lines.slice(1).map(l => ' '.repeat(bullet.length) + l)]
+
 function layoutLines(project: Project, page: Page, heightOf: (b: Block) => number): string[] {
-  const out: string[] = []
   const fw = frameWidthOf(page)
-  rowsOf(placedBlocks(page, heightOf), heightOf).forEach((row, r) => {
-    if (row.length === 1) {
-      const [first, ...rest] = blockLines(row[0], project, widthText(row[0].w, fw), page)
-      out.push(`${r + 1}. ${first}`, ...rest.map(l => '   ' + l))
-    } else {
-      out.push(`${r + 1}. A row of ${row.length}, side by side:`)
-      row.forEach((b, i) => {
-        const [first, ...rest] = blockLines(b, project, `${position(i, row.length)}, ${widthText(b.w, fw)}`, page)
-        out.push(`   - ${first}`, ...rest.map(l => '     ' + l))
-      })
-    }
+  const scale = spacingScale(project.tokens)
+  const root = inferLayout(placedBlocks(page, heightOf), heightOf)
+  if (!root) return []
+
+  /** `where`: the node's place in its parent ("left", …), if any. */
+  const lines = (node: Layout, where: string[], top: boolean): string[] => {
+    const width = widthText(node.w, fw)
+    const align = top ? hAlign(node, fw) : undefined
+    if (node.kind === 'block') return blockLines(node.block, project, [...where, width, align].filter(Boolean).join(', '), page)
+    const gap = node.gaps.length && node.gaps.every(g => near(g, node.gaps[0])) ? node.gaps[0] : undefined
+    const n = node.items.length
+    let head: string
+    if (node.kind === 'row') {
+      const equal = node.items.every(it => near(it.w, node.items[0].w))
+      const spacing = gap === undefined ? 'with uneven gaps' : gap > 4 ? `${gapText(gap, scale)} apart` : 'side by side'
+      head = `A row of ${n}${equal ? ' equal' : ''} columns, ${spacing}`
+      head += [alignment(node.items, 'y'), align, width === 'full width' ? '' : width].filter(Boolean).map(x => `, ${x}`).join('')
+    } else if (node.kind === 'stack') {
+      head = ['Stacked top to bottom', gap !== undefined && gap > 4 && `${gapText(gap, scale)} apart`, alignment(node.items, 'x')].filter(Boolean).join(', ')
+    } else head = 'Layered on top of each other (they overlap), bottom to top'
+    if (where.length) head = `${where.join(', ')}: ${head.replace(/^./, c => c.toLowerCase())}`
+    return [head + ':', ...node.items.flatMap((it, i) => nest(lines(it, node.kind === 'row' ? [position(i, n)] : [], false), '- '))]
+  }
+
+  return root.items.flatMap((section, i) => {
+    const before = root.gaps[i - 1]
+    const space = i === 0 || before <= 4 ? [] : [`${gapText(before, scale)} below the previous section`]
+    return nest(lines(section, space, true), `${i + 1}. `)
   })
-  return out
 }
 
 /** Short one-line-per-section list of a page as imported. */
@@ -200,13 +249,14 @@ function currentLines(blocks: Block[], project: Project): string[] {
   })
 }
 
-const sameLayout = (a: Block[], b: Block[]) =>
-  a.length === b.length &&
-  a.every((x, i) => {
-    const y = b[i]
-    return x.kind === y.kind && x.componentId === y.componentId && x.elementPath === y.elementPath && x.placeholder === y.placeholder &&
-      Math.abs(x.x - y.x) < 0.5 && Math.abs(x.y - y.y) < 0.5 && Math.abs(x.w - y.w) < 0.5 && !x.tree && !x.notes.trim() && !x.height
+/** An imported page left as it was: the same blocks (by id) in the same places, with no edits or notes. */
+function sameLayout(blocks: Block[], original: Block[]): boolean {
+  const before = new Map(original.map(o => [o.id, o]))
+  return blocks.length === original.length && blocks.every(x => {
+    const y = before.get(x.id)
+    return !!y && near(x.x, y.x) && near(x.y, y.y) && near(x.w, y.w) && x.height === y.height && !x.tree && !x.notes.trim()
   })
+}
 
 function brandLines(tokens: BrandToken[]): string[] {
   if (!tokens.length) return ['No brand tokens were extracted. Match the existing styles in the codebase.']
@@ -279,6 +329,8 @@ export function buildPrompt(project: Project, measured: Record<string, number>):
     // Next.js route components are named after their route ("/about"), so only the file is useful.
     if (owner) meta.push(owner.name.startsWith('/') ? `rendered by ${code(owner.filePath)}` : `rendered by ${code(owner.name)} in ${code(owner.filePath)}`)
     if (!page.original) meta.push('a new page that does not exist yet')
+    const frame = FRAMES.find(f => f.width === frameWidthOf(page))
+    meta.push(`sketched on a ${frameWidthOf(page)}px ${frame ? frame.label.toLowerCase() + ' ' : ''}frame`)
     if (meta.length) L.push(meta.join(', ').replace(/^./, c => c.toUpperCase()) + '.', '')
     if (page.notes.trim()) L.push(`**Page notes:** ${page.notes.trim()}`, '')
 

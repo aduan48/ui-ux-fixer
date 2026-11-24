@@ -43,24 +43,66 @@ export const fitToFrame = (blocks: Block[], frameWidth: number): Block[] =>
 export const contentBottom = (blocks: Block[], heightOf: (b: Block) => number) =>
   Math.max(0, ...blocks.map(b => b.y + heightOf(b)))
 
+/** A box in page px: a block, or the bounds of a group of blocks. */
+export interface Box { x: number; y: number; w: number; h: number }
+
 /**
- * Rows top to bottom: a block joins the current row when it starts above that row's bottom edge.
- * shortcut: one level of rows, no columns or gaps; M4 replaces it with full layout inference.
+ * The page as a layout tree (an XY cut): blocks stacked top to bottom split into bands by vertical
+ * overlap; a band of several blocks splits into columns by horizontal overlap; and so on down.
+ * Blocks that overlap on both axes can't be cut apart and become a `layered` group.
+ * `gaps[i]` is the space between items i and i+1 (never negative: overlapping items share a band).
  */
-export function rowsOf(blocks: Block[], heightOf: (b: Block) => number): Block[][] {
-  const rows: Block[][] = []
-  let bottom = -Infinity
-  for (const b of [...blocks].sort((a, c) => a.y - c.y || a.x - c.x)) {
-    const end = b.y + heightOf(b)
-    if (b.y >= bottom - 0.5) {
-      rows.push([b])
-      bottom = end
+export type Layout = Box & (
+  | { kind: 'block'; block: Block }
+  | { kind: 'stack' | 'row' | 'layered'; items: Layout[]; gaps: number[] }
+)
+
+export type Group = Extract<Layout, { items: Layout[] }>
+
+const bounds = (items: Box[]): Box => {
+  const x = Math.min(...items.map(i => i.x)), y = Math.min(...items.map(i => i.y))
+  return { x, y, w: Math.max(...items.map(i => i.x + i.w)) - x, h: Math.max(...items.map(i => i.y + i.h)) - y }
+}
+
+/** Groups of items whose spans overlap along one axis, in order along it. */
+function bands<T extends Box>(items: T[], axis: 'x' | 'y'): T[][] {
+  const [start, size] = axis === 'y' ? (['y', 'h'] as const) : (['x', 'w'] as const)
+  const groups: T[][] = []
+  let end = -Infinity
+  for (const it of [...items].sort((a, b) => a[start] - b[start])) {
+    if (it[start] >= end - 0.5) {
+      groups.push([it])
+      end = it[start] + it[size]
     } else {
-      rows[rows.length - 1].push(b)
-      bottom = Math.max(bottom, end)
+      groups[groups.length - 1].push(it)
+      end = Math.max(end, it[start] + it[size])
     }
   }
-  return rows.map(r => r.sort((a, c) => a.x - c.x))
+  return groups
+}
+
+type Item = Box & { block: Block; z: number }
+
+function cut(items: Item[], axis: 'x' | 'y', tried = false): Layout {
+  const leaf = ({ x, y, w, h, block }: Item): Layout => ({ kind: 'block', x, y, w, h, block })
+  if (items.length === 1) return leaf(items[0])
+  const groups = bands(items, axis)
+  if (groups.length === 1) {
+    if (!tried) return cut(items, axis === 'y' ? 'x' : 'y', true)
+    // Overlapping on both axes: bottom to top, in z-order.
+    return { kind: 'layered', ...bounds(items), items: [...items].sort((a, b) => a.z - b.z).map(leaf), gaps: [] }
+  }
+  const nodes = groups.map(g => cut(g, axis === 'y' ? 'x' : 'y'))
+  const gaps = nodes.slice(1).map((n, i) => (axis === 'y' ? n.y - (nodes[i].y + nodes[i].h) : n.x - (nodes[i].x + nodes[i].w)))
+  return { kind: axis === 'y' ? 'stack' : 'row', ...bounds(nodes), items: nodes, gaps }
+}
+
+/** The layout tree of a page's placed blocks (`undefined` for an empty page). Always a `stack` at the top. */
+export function inferLayout(blocks: Block[], heightOf: (b: Block) => number): Group | undefined {
+  if (!blocks.length) return
+  const items = blocks.map((b, z) => ({ x: b.x, y: b.y, w: b.w, h: heightOf(b), block: b, z }))
+  const root = cut(items, 'y')
+  return root.kind === 'stack' ? root : { kind: 'stack', ...bounds([root]), items: [root], gaps: [] }
 }
 
 export type Restack = 'forward' | 'backward' | 'front' | 'back'
