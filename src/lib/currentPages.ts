@@ -81,8 +81,20 @@ const homeFirst = (a: CurrentPage, b: CurrentPage) => (a.name === 'Home' ? -1 : 
  *  1. React Router: each <Route> becomes a page, inside the component that holds <Routes> (navbar, footer…)
  *  2. Next.js: routes wrapped in the root layout
  *  3. otherwise `App`, else one page per HTML file.
+ * Navbars and footers that none of those pages show (the router couldn't be followed, or they live
+ * in a wrapper we can't see through) get a tab of their own, so they're always on the canvas.
  */
 export function buildCurrentPages(components: ScannedComponent[]): CurrentPage[] {
+  const pages = routePages(components)
+  const used = new Set(pages.flatMap(p => p.blocks.map(b => (b.kind === 'placeholder' ? '' : b.componentId))))
+  const shared = components
+    .filter(c => (c.type === 'navbar' || c.type === 'footer') && !used.has(c.id))
+    .sort((a, b) => Number(a.type === 'footer') - Number(b.type === 'footer')) // navbar on top
+  if (!shared.length) return pages
+  return [...pages, { name: shared.map(c => c.name).join(' & '), blocks: shared.map(c => ({ kind: 'component', componentId: c.id })) }]
+}
+
+function routePages(components: ScannedComponent[]): CurrentPage[] {
   const index = indexComponents(components)
 
   // 1. React Router

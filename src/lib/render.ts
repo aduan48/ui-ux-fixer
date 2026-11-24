@@ -535,7 +535,7 @@ export interface PreviewOptions {
 const SNAPSHOT_SCRIPT = `addEventListener('load', async () => {
   await document.fonts.ready
   await new Promise(r => setTimeout(r, 700))
-  const height = Math.ceil(document.body.getBoundingClientRect().height)
+  const height = skHeight()
   try {
     const png = await htmlToImage.toPng(document.documentElement, { width: innerWidth, height, pixelRatio: 1 })
     parent.postMessage({ skPng: png, skHeight: height }, '*')
@@ -582,7 +582,16 @@ sk-box{all:initial;position:absolute;pointer-events:none;z-index:2147483647;disp
 .sk-sel{outline:2px solid #3b82f6;outline-offset:-1px;background:rgba(59,130,246,.06)}
 .sk-line{background:#3b82f6;border-radius:2px}` : ''}
 </style></head><body>${bodyHtml}
-<script>new ResizeObserver(()=>parent.postMessage({skHeight:Math.ceil(document.body.getBoundingClientRect().height)},'*')).observe(document.body)</script>
+<script>
+// Content height: the body, plus bars fixed to the top (a fixed navbar takes no room in the flow, so the body alone
+// measures 0). Full-screen fixed layers (overlays, menus, gates) and bottom bars don't count: they'd pin the frame open.
+window.skHeight = () => Math.ceil(Math.max(document.body.getBoundingClientRect().height,
+  ...[...document.body.querySelectorAll('*')].filter(el => getComputedStyle(el).position === 'fixed')
+    .map(el => el.getBoundingClientRect()).filter(r => r.top <= 1 && r.height < innerHeight / 2).map(r => r.bottom)))
+const skReport = () => parent.postMessage({ skHeight: skHeight() }, '*')
+new ResizeObserver(skReport).observe(document.body)
+addEventListener('load', skReport)
+</script>
 ${backdrop}
 ${editor}
 ${opts.snapshotUrl ? `<script src="${opts.snapshotUrl}"></script><script>${SNAPSHOT_SCRIPT}</script>` : ''}
