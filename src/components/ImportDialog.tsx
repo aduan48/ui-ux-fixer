@@ -1,5 +1,6 @@
 import { FolderOpen, Loader2, X } from 'lucide-react'
 import { useEffect, useRef, useState } from 'react'
+import { buildCurrentPages } from '../lib/currentPages'
 import { readDataTransfer, readFileList, type ReadResult } from '../lib/files'
 import type { ScanResult } from '../lib/scan'
 import { useStore } from '../store'
@@ -7,7 +8,7 @@ import { useStore } from '../store'
 type Status =
   | { kind: 'idle' }
   | { kind: 'busy' }
-  | { kind: 'done'; files: number; skipped: string[]; scan: ScanResult }
+  | { kind: 'done'; files: number; skipped: string[]; scan: ScanResult; loadedPages: boolean }
   | { kind: 'error'; message: string }
 
 export function ImportDialog({ onClose }: { onClose: () => void }) {
@@ -25,11 +26,13 @@ export function ImportDialog({ onClose }: { onClose: () => void }) {
     setStatus({ kind: 'busy' })
     try {
       const { files, skipped } = await read()
-      if (!files.length) throw new Error('No .js, .jsx, .ts, .tsx or .html files found in that folder.')
+      if (!files.some(f => !/\.(png|jpe?g|gif|svg|webp|avif|ico)$/i.test(f.path))) throw new Error('No .js, .jsx, .ts, .tsx, .html or .css files found in that folder.')
       const { scanProject } = await import('../lib/scan') // pulls in Babel only when needed
       const scan = scanProject(files)
-      useStore.getState().importComponents(scan.components, source)
-      setStatus({ kind: 'done', files: files.length, skipped, scan })
+      const pagesBefore = useStore.getState().project.pages
+      useStore.getState().importScan(scan, source)
+      const loadedPages = useStore.getState().project.pages !== pagesBefore
+      setStatus({ kind: 'done', files: files.length, skipped, scan, loadedPages })
     } catch (e) {
       setStatus({ kind: 'error', message: e instanceof Error ? e.message : String(e) })
     }
@@ -102,12 +105,22 @@ export function ImportDialog({ onClose }: { onClose: () => void }) {
           {status.kind === 'done' && (
             <div className="space-y-2 text-[13px]">
               <p className="rounded-md bg-green-50 px-3 py-2 text-green-800">
-                Found <b>{status.scan.components.length}</b> components in {status.files} files.
+                Found <b>{status.scan.components.length}</b> components in {status.files} files ({Object.keys(status.scan.assets).length} images).
               </p>
               {status.scan.failed.length > 0 && (
                 <Details title={`${status.scan.failed.length} files could not be parsed`} items={status.scan.failed.map(f => `${f.path}: ${f.error}`)} />
               )}
               {status.skipped.length > 0 && <Details title={`${status.skipped.length} files skipped (over 500 KB)`} items={status.skipped} />}
+              {status.loadedPages ? (
+                <p className="text-neutral-500">Your current pages are on the canvas, ready to redesign.</p>
+              ) : buildCurrentPages(status.scan.components).length > 0 && (
+                <button
+                  onClick={() => { useStore.getState().addCurrentPages(); onClose() }}
+                  className="w-full rounded-md bg-neutral-900 py-1.5 font-medium text-white hover:bg-neutral-700"
+                >
+                  Add current site as new pages
+                </button>
+              )}
               <button onClick={onClose} className="w-full rounded-md border border-neutral-200 py-1.5 font-medium hover:bg-neutral-50">
                 Done
               </button>

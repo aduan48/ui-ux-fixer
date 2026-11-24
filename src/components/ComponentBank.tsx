@@ -1,31 +1,36 @@
 import { useDraggable } from '@dnd-kit/core'
 import { ChevronRight, Search, type LucideIcon } from 'lucide-react'
 import { useState } from 'react'
-import { COMPONENT_TYPE_ICONS, COMPONENT_TYPES, PLACEHOLDERS } from '../lib/catalog'
+import { COMPONENT_TYPE_ICONS, COMPONENT_TYPES, PLACEHOLDERS, elementIcon } from '../lib/catalog'
+import { elementsOf } from '../lib/render'
 import { useStore } from '../store'
-import type { BankItem } from '../types'
+import type { BankItem, ScannedComponent } from '../types'
 
 /** One draggable tile. The drag ghost is rendered by DragOverlay in App, so the tile stays put. */
-export function BankTile({ item, label, sublabel, title, icon: Icon }: {
+export function BankTile({ item, label, sublabel, title, icon: Icon, compact }: {
   item: BankItem
   label: string
   sublabel?: string
   title?: string
   icon: LucideIcon
+  compact?: boolean
 }) {
-  const dragId = item.kind === 'component' ? `bank:c:${item.componentId}` : `bank:p:${item.placeholder}`
+  const dragId =
+    item.kind === 'component' ? `bank:c:${item.componentId}`
+    : item.kind === 'element' ? `bank:e:${item.componentId}:${item.elementPath}`
+    : `bank:p:${item.placeholder}`
   const { attributes, listeners, setNodeRef, isDragging } = useDraggable({ id: dragId, data: { bankItem: item } })
   return (
     <button
       ref={setNodeRef}
       {...attributes}
       {...listeners}
-      title={title}
-      className={`flex w-full cursor-grab items-center gap-2.5 rounded-md border border-neutral-200 bg-white px-2.5 py-2 text-left hover:border-neutral-300 hover:bg-neutral-50 active:cursor-grabbing ${isDragging ? 'opacity-40' : ''}`}
+      title={title ?? (compact ? label : undefined)}
+      className={`flex w-full cursor-grab items-center gap-2.5 rounded-md border border-neutral-200 bg-white text-left ${compact ? 'px-2 py-1' : 'py-2 pr-10 pl-2.5'} hover:border-neutral-300 hover:bg-neutral-50 active:cursor-grabbing ${isDragging ? 'opacity-40' : ''}`}
     >
       <Icon className="size-4 shrink-0 text-neutral-500" />
       <span className="min-w-0">
-        <span className="block truncate text-[13px] font-medium text-neutral-800">{label}</span>
+        <span className={`block truncate text-neutral-800 ${compact ? 'text-xs' : 'text-[13px] font-medium'}`}>{label}</span>
         {sublabel && <span className="block truncate font-mono text-[11px] text-neutral-400">{sublabel}</span>}
       </span>
     </button>
@@ -83,21 +88,55 @@ export function ComponentBank({ onImport }: { onImport: () => void }) {
           COMPONENT_TYPES.map(({ type, label }) => {
             const group = matches.filter(c => c.type === type)
             return group.length > 0 && <Group key={type} label={label} count={group.length}>
-              {group.map(c => (
-                <BankTile
-                  key={c.id}
-                  item={{ kind: 'component', componentId: c.id }}
-                  label={c.name}
-                  sublabel={c.filePath}
-                  title={c.props.length ? `Props: ${c.props.join(', ')}` : undefined}
-                  icon={COMPONENT_TYPE_ICONS[c.type]}
-                />
-              ))}
+              {group.map(c => <ComponentTile key={c.id} component={c} />)}
             </Group>
           })
         )}
       </div>
     </aside>
+  )
+}
+
+/** A component tile plus an expandable list of its inner elements, each draggable on its own. */
+function ComponentTile({ component: c }: { component: ScannedComponent }) {
+  const [open, setOpen] = useState(false)
+  const elements = elementsOf(c.tree)
+  return (
+    <div>
+      <div className="relative">
+        <BankTile
+          item={{ kind: 'component', componentId: c.id }}
+          label={c.name}
+          sublabel={c.filePath}
+          title={c.props.length ? `Props: ${c.props.join(', ')}` : undefined}
+          icon={COMPONENT_TYPE_ICONS[c.type]}
+        />
+        {elements.length > 0 && (
+          <button
+            onClick={() => setOpen(!open)}
+            aria-expanded={open}
+            aria-label={`${open ? 'Hide' : 'Show'} ${elements.length} elements in ${c.name}`}
+            className="absolute top-1/2 right-1.5 flex -translate-y-1/2 items-center gap-0.5 rounded px-1 py-0.5 text-[11px] text-neutral-400 hover:bg-neutral-100 hover:text-neutral-700"
+          >
+            {elements.length}
+            <ChevronRight className={`size-3 transition-transform ${open ? 'rotate-90' : ''}`} />
+          </button>
+        )}
+      </div>
+      {open && (
+        <div className="mt-1 ml-3 grid grid-cols-1 gap-1 border-l border-neutral-200 pl-2">
+          {elements.map(e => (
+            <BankTile
+              key={e.path}
+              item={{ kind: 'element', componentId: c.id, elementPath: e.path }}
+              label={e.label}
+              icon={elementIcon(e.tag)}
+              compact
+            />
+          ))}
+        </div>
+      )}
+    </div>
   )
 }
 

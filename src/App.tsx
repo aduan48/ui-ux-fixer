@@ -4,12 +4,13 @@ import {
 } from '@dnd-kit/core'
 import { sortableKeyboardCoordinates } from '@dnd-kit/sortable'
 import { Upload } from 'lucide-react'
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { Canvas, CANVAS_DROP_ID } from './components/Canvas'
 import { ComponentBank } from './components/ComponentBank'
 import { ImportDialog } from './components/ImportDialog'
 import { NotesPanel } from './components/NotesPanel'
 import { placeholderMeta } from './lib/catalog'
+import { labelAt } from './lib/render'
 import { useStore } from './store'
 import type { BankItem } from './types'
 
@@ -29,7 +30,15 @@ const collision: CollisionDetection = args => {
   return block ? [block] : hits
 }
 
+/** The store loads from IndexedDB asynchronously; render nothing until it has. */
+function useHydrated() {
+  const [hydrated, setHydrated] = useState(useStore.persist.hasHydrated())
+  useEffect(() => useStore.persist.onFinishHydration(() => setHydrated(true)), [])
+  return hydrated
+}
+
 export default function App() {
+  const hydrated = useHydrated()
   const projectName = useStore(s => s.project.name)
   const [dragging, setDragging] = useState<BankItem | null>(null)
   const [importing, setImporting] = useState(false)
@@ -54,6 +63,8 @@ export default function App() {
     const from = blocks.findIndex(b => b.id === active.id)
     if (from !== -1 && overIndex !== -1 && from !== overIndex) moveBlock(from, overIndex)
   }
+
+  if (!hydrated) return null
 
   return (
     <div className="flex h-screen flex-col text-neutral-900">
@@ -92,8 +103,10 @@ export default function App() {
 }
 
 function DragGhost({ item }: { item: BankItem }) {
-  const component = useStore(s => item.kind === 'component' ? s.project.components.find(c => c.id === item.componentId) : undefined)
-  const label = item.kind === 'placeholder' ? placeholderMeta(item.placeholder).label : component?.name
+  const component = useStore(s => item.kind === 'placeholder' ? undefined : s.project.components.find(c => c.id === item.componentId))
+  const label = item.kind === 'placeholder' ? placeholderMeta(item.placeholder).label
+    : item.kind === 'element' ? labelAt(component?.tree, item.elementPath)?.label
+    : component?.name
   return (
     <div className="w-48 cursor-grabbing rounded-md border border-blue-400 bg-white px-3 py-2 text-[13px] font-medium shadow-lg">
       {label}

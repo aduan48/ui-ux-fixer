@@ -1,0 +1,25 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  --brand: #4f46e5;
+  --brand-accent: #f59e0b;
+  --radius: 12px;
+}
+
+body {
+  font-family: "Inter", system-ui, sans-serif;
+  color: #111827;
+}
+
+@layer components {
+  .btn-primary {
+    @apply rounded-lg px-4 py-2 font-medium text-white;
+    background: var(--brand);
+  }
+}
+
+.hero-bg {
+  background: url("../public/logo.svg") no-repeat right 24px top 24px;
+}

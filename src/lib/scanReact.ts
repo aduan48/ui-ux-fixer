@@ -1,27 +1,13 @@
 import { parse } from '@babel/parser'
 import type { ComponentType, ScannedComponent, SourceFile } from '../types'
+import { hasJsx, isFnLike, walk, type Node } from './ast'
 import { guessType, splitWords, type ContentHints } from './guessType'
-
-// Babel AST nodes, typed loosely: we only read a handful of fields, and Babel 7/8 differ in a few names.
-type Node = { type: string; [key: string]: any }
+import { jsxToTree } from './jsxTree'
 
 const SKIP_FILE = /\.(test|spec|stories|story)\.[jt]sx?$|(^|\/)(__tests__|__mocks__)\//
 const ROUTE_FILE = /(^|\/)app\/(.+\/)?(page|layout)\.[jt]sx?$|(^|\/)pages\/(?!api\/).+\.[jt]sx?$/
 const GENERIC_ROUTE_NAMES = new Set(['Page', 'Layout', 'RootLayout', 'Home', 'Index', 'Default'])
 
-/** Visit every node under `node`, depth first. Return false from `fn` to skip a subtree. */
-function walk(node: unknown, fn: (n: Node) => boolean | void): void {
-  if (!node || typeof node !== 'object') return
-  if (Array.isArray(node)) return node.forEach(n => walk(n, fn))
-  const n = node as Node
-  if (typeof n.type === 'string' && fn(n) === false) return
-  for (const key in n) {
-    if (key !== 'loc' && key !== 'start' && key !== 'end' && key !== 'extra') walk(n[key], fn)
-  }
-}
-
-const isFn = (n?: Node) =>
-  !!n && ['FunctionDeclaration', 'FunctionExpression', 'ArrowFunctionExpression', 'ClassDeclaration', 'ClassExpression'].includes(n.type)
 
 const typeArgs = (n: Node): Node[] => (n.typeArguments ?? n.typeParameters)?.params ?? []
 
@@ -54,15 +40,6 @@ function contentHints(fn: Node): ContentHints {
     if (n.type === 'CallExpression' && calleeName(n.callee) === 'map' && hasJsx(n.arguments)) rendersList = true
   })
   return { rootTag, tags, rendersList }
-}
-
-function hasJsx(node: unknown): boolean {
-  let found = false
-  walk(node, n => {
-    if (n.type === 'JSXElement' || n.type === 'JSXFragment') found = true
-    return !found
-  })
-  return found
 }
 
 /** Member names of a type literal, interface, intersection, or a reference to one in this file. */
@@ -119,7 +96,7 @@ function routeName(path: string) {
   return '/' + route
 }
 
-export function scanReactFile(file: SourceFile): ScannedComponent[] {
+export function scanReactFile(file: SourceFile, resolve: (from: string, ref: string) => string | undefined = () => undefined): ScannedComponent[] {
   if (SKIP_FILE.test(file.path)) return []
   const ast = parse(file.content, {
     sourceType: 'module',
@@ -147,6 +124,15 @@ export function scanReactFile(file: SourceFile): ScannedComponent[] {
     if (d.type === 'TSTypeAliasDeclaration') types.set(d.id.name, d.typeAnnotation)
   }
   for (const s of body) declare(s.type.startsWith('Export') ? s.declaration : s)
+
+  // `import logo from './logo.png'` (default or namespace imports of image files).
+  const imageImports = new Map<string, string>()
+  for (const s of body) {
+    if (s.type !== 'ImportDeclaration') continue
+    const path = resolve(file.path, s.source.value)
+    if (path) for (const sp of s.specifiers) if (sp.type !== 'ImportSpecifier') imageImports.set(sp.local.name, path)
+  }
+  const treeCtx = { source: file.content, resolveAsset: (ref: string) => resolve(file.path, ref), imageImports }
 
   // Pass 2: collect what is exported, as [name, function, props type].
   const exported: [string, Node | undefined, Node | undefined][] = []
@@ -177,7 +163,7 @@ export function scanReactFile(file: SourceFile): ScannedComponent[] {
   const isRoute = ROUTE_FILE.test(file.path)
   const out = new Map<string, ScannedComponent>()
   for (const [name, fn, propsType] of exported) {
-    if (!/^[A-Z]/.test(name) || !isFn(fn) || !hasJsx(fn!.body)) continue
+    if (!/^[A-Z]/.test(name) || !isFnLike(fn) || !hasJsx(fn!.body)) continue
     const displayName = isRoute && GENERIC_ROUTE_NAMES.has(name) ? routeName(file.path) : name
     const type: ComponentType = isRoute ? 'page' : guessType(splitWords(name), contentHints(fn!))
     const id = `${file.path}#${displayName}`
@@ -188,6 +174,7 @@ export function scanReactFile(file: SourceFile): ScannedComponent[] {
       props: fn!.type.startsWith('Class') ? [] : propsOf(fn!, propsType, types),
       type,
       framework: 'react',
+      tree: jsxToTree(fn!, treeCtx),
     })
   }
   return [...out.values()]

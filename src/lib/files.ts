@@ -1,17 +1,22 @@
 import type { SourceFile } from '../types'
 
 const IGNORED_DIRS = new Set(['node_modules', 'dist', 'build', '.git', '.next', 'out', 'coverage', '.vercel'])
-const EXTENSIONS = /\.(jsx?|tsx?|mjs|cjs|html?|css|scss)$/i
-const MAX_BYTES = 500_000
+const TEXT_EXT = /\.(jsx?|tsx?|mjs|cjs|html?|css|scss)$/i
+const IMAGE_EXT = /\.(png|jpe?g|gif|svg|webp|avif|ico)$/i
+const MAX_TEXT_BYTES = 500_000
+const MAX_IMAGE_BYTES = 1_500_000
 
 export interface ReadResult {
+  /** Text files as text; images as data URLs (used by previews). */
   files: SourceFile[]
   skipped: string[] // wanted extension, but too large
 }
 
+export const isImage = (path: string) => IMAGE_EXT.test(path)
+
 /** Path-level filter shared by every import source (folder picker, drag-drop, GitHub). */
 export const isWanted = (path: string) =>
-  EXTENSIONS.test(path) && !path.split('/').some(part => IGNORED_DIRS.has(part))
+  (TEXT_EXT.test(path) || IMAGE_EXT.test(path)) && !path.split('/').some(part => IGNORED_DIRS.has(part))
 
 /** Strip the picked folder's own name so paths read like `src/App.tsx`. */
 const stripRoot = (paths: string[]) => {
@@ -19,14 +24,23 @@ const stripRoot = (paths: string[]) => {
   return first && paths.every(p => p.startsWith(first + '/')) ? paths.map(p => p.slice(first.length + 1)) : paths
 }
 
+const dataUrl = (file: File) =>
+  new Promise<string>((resolve, reject) => {
+    const reader = new FileReader()
+    reader.onload = () => resolve(reader.result as string)
+    reader.onerror = () => reject(reader.error)
+    reader.readAsDataURL(file)
+  })
+
 async function readAll(entries: { path: string; file: File }[]): Promise<ReadResult> {
   const wanted = entries.filter(e => isWanted(e.path))
   const paths = stripRoot(wanted.map(e => e.path))
   const skipped: string[] = []
   const files: SourceFile[] = []
   await Promise.all(wanted.map(async (e, i) => {
-    if (e.file.size > MAX_BYTES) skipped.push(paths[i])
-    else files.push({ path: paths[i], content: await e.file.text() })
+    const image = isImage(paths[i])
+    if (e.file.size > (image ? MAX_IMAGE_BYTES : MAX_TEXT_BYTES)) skipped.push(paths[i])
+    else files.push({ path: paths[i], content: image ? await dataUrl(e.file) : await e.file.text() })
   }))
   files.sort((a, b) => a.path.localeCompare(b.path))
   return { files, skipped }

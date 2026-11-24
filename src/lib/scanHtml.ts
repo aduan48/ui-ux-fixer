@@ -1,7 +1,31 @@
-import type { ScannedComponent, SourceFile } from '../types'
+import type { ScannedComponent, SourceFile, StaticNode } from '../types'
 import { guessType, splitWords } from './guessType'
+import { ASSET_PREFIX } from './paths'
+
+type Resolve = (from: string, ref: string) => string | undefined
 
 const SEMANTIC = new Set(['header', 'nav', 'section', 'footer', 'aside', 'article'])
+
+function toTree(node: globalThis.Node, file: string, resolve: Resolve): StaticNode | undefined {
+  if (node.nodeType === 3) {
+    const v = node.textContent!.replace(/\s+/g, ' ')
+    return v.trim() ? { t: 'text', v } : undefined
+  }
+  if (!(node instanceof Element) || ['SCRIPT', 'STYLE', 'TEMPLATE'].includes(node.tagName)) return
+  const attrs: Record<string, string> = {}
+  for (const a of node.attributes) {
+    if (a.name === 'class' || /^on/i.test(a.name)) continue
+    const asset = a.name === 'src' || a.name === 'poster' ? resolve(file, a.value) : undefined
+    attrs[a.name] = asset ? ASSET_PREFIX + asset : a.value
+  }
+  return {
+    t: 'el',
+    tag: node.tagName.toLowerCase(),
+    ...(node.getAttribute('class') && { cls: node.getAttribute('class')! }),
+    ...(Object.keys(attrs).length && { attrs }),
+    children: [...node.childNodes].map(c => toTree(c, file, resolve)).filter((n): n is StaticNode => !!n),
+  }
+}
 
 function label(el: Element) {
   const tag = el.tagName.toLowerCase()
@@ -16,7 +40,7 @@ function label(el: Element) {
  * Top-level semantic elements become components. `main` is a container: its semantic
  * children and its classed divs are components. Unclassed wrapper divs are looked through.
  */
-export function scanHtmlFile(file: SourceFile): ScannedComponent[] {
+export function scanHtmlFile(file: SourceFile, resolve: Resolve = () => undefined): ScannedComponent[] {
   const doc = new DOMParser().parseFromString(file.content, 'text/html')
   const found: Element[] = []
   const visit = (parent: Element, inMain: boolean) => {
@@ -46,6 +70,7 @@ export function scanHtmlFile(file: SourceFile): ScannedComponent[] {
         tags: new Set([...el.querySelectorAll('*')].map(e => e.tagName.toLowerCase())),
       }),
       framework: 'html',
+      tree: toTree(el, file.path, resolve),
     })
   }
   return [...out.values()]

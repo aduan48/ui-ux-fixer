@@ -1,6 +1,7 @@
 import {
-  Columns3, File, CreditCard, FileText, Image, LayoutPanelTop, List, Menu, MousePointerClick,
-  PanelBottom, Rows3, Square, SquareDashed, Type, type LucideIcon,
+  Columns3, Component, CreditCard, File, FileText, Heading, Image, LayoutPanelTop, Link, List, Menu,
+  MousePointerClick, PanelBottom, Pilcrow, Rows3, Square, SquareDashed, Tag, TextCursorInput, Type, Video,
+  type LucideIcon,
 } from 'lucide-react'
 import type { ComponentType, PlaceholderType } from '../types'
 
@@ -40,3 +41,15 @@ export const COMPONENT_TYPES: { type: ComponentType; label: string }[] = [
   { type: 'other', label: 'Other' },
   { type: 'page', label: 'Pages' },
 ]
+
+/** Icon for an inner element, by tag (or a component name for nested components). */
+export function elementIcon(tag: string): LucideIcon {
+  if (/^h[1-6]$/.test(tag)) return Heading
+  if (/^[A-Z]/.test(tag)) return Component
+  const icons: Record<string, LucideIcon> = {
+    p: Pilcrow, button: MousePointerClick, a: Link, img: Image, figure: Image, video: Video,
+    input: TextCursorInput, textarea: TextCursorInput, select: TextCursorInput, label: Tag,
+    ul: List, ol: List, form: FileText, nav: Menu, section: Rows3, article: CreditCard,
+  }
+  return icons[tag] ?? Square
+}
