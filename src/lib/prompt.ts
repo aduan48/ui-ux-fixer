@@ -239,7 +239,7 @@ function stackLine(project: Project): string {
 }
 
 /** The full Markdown brief for a coding agent. `measured`: preview heights by block id, for grouping rows. */
-export function buildPrompt(project: Project, measured: Record<string, number> = {}): string {
+export function buildPrompt(project: Project, measured: Record<string, number>): string {
   const heightOf = heightFrom(measured)
   const L: string[] = []
   const pages = project.pages.filter(p => p.blocks.length || p.notes.trim())

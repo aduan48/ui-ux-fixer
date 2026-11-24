@@ -63,7 +63,7 @@ export function ComponentBank({ onImport }: { onImport: () => void }) {
       <div className="flex-1 overflow-x-hidden overflow-y-auto p-3">
         {!q && (
           <>
-            <SectionLabel>Placeholder blocks</SectionLabel>
+            <SectionLabel>New blocks</SectionLabel>
             <div className="grid grid-cols-1 gap-1.5">
               {PLACEHOLDERS.map(p => (
                 <BankTile key={p.type} item={{ kind: 'placeholder', placeholder: p.type }} label={p.label} icon={p.icon} />

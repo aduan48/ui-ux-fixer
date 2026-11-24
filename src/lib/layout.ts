@@ -32,6 +32,13 @@ export function flowPositions(blocks: Block[], frameWidth: number, heightOf: (b:
 export const placedBlocks = (page: Page, heightOf: (b: Block) => number) =>
   page.flow ? flowPositions(page.blocks, frameWidthOf(page), heightOf) : page.blocks
 
+/** Keep blocks inside a (narrower) frame: clamp widths, then shift left so they don't stick out. */
+export const fitToFrame = (blocks: Block[], frameWidth: number): Block[] =>
+  blocks.map(b => {
+    const w = Math.min(b.w, frameWidth)
+    return { ...b, w, x: Math.max(0, Math.min(b.x, frameWidth - w)) }
+  })
+
 /** Bottom edge of the content, in page px. */
 export const contentBottom = (blocks: Block[], heightOf: (b: Block) => number) =>
   Math.max(0, ...blocks.map(b => b.y + heightOf(b)))
@@ -54,4 +61,22 @@ export function rowsOf(blocks: Block[], heightOf: (b: Block) => number): Block[]
     }
   }
   return rows.map(r => r.sort((a, c) => a.x - c.x))
+}
+
+export type Restack = 'forward' | 'backward' | 'front' | 'back'
+
+/** Move the selected blocks in z-order (array order; last is on top), keeping their relative order. */
+export function restack(blocks: Block[], ids: string[], dir: Restack): Block[] {
+  const sel = (b: Block) => ids.includes(b.id)
+  if (dir === 'front') return [...blocks.filter(b => !sel(b)), ...blocks.filter(sel)]
+  if (dir === 'back') return [...blocks.filter(sel), ...blocks.filter(b => !sel(b))]
+  const out = [...blocks]
+  // Step each selected block past one unselected neighbour; walk from the side we move towards.
+  const order = dir === 'forward' ? [...out.keys()].reverse() : [...out.keys()]
+  const step = dir === 'forward' ? 1 : -1
+  for (const i of order) {
+    const j = i + step
+    if (sel(out[i]) && out[j] && !sel(out[j])) [out[i], out[j]] = [out[j], out[i]]
+  }
+  return out
 }

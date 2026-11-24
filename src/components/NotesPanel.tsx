@@ -9,7 +9,8 @@ const textarea =
 export function NotesPanel() {
   const page = useActivePage()
   const globalNotes = useStore(s => s.project.globalNotes)
-  const selectedBlockId = useStore(s => s.selectedBlockId)
+  // Notes are per block, so they show for a single selection only.
+  const selectedBlockId = useStore(s => (s.selectedIds.length === 1 ? s.selectedIds[0] : null))
   const block = page.blocks.find(b => b.id === selectedBlockId)
   const blockName = useBlockTitle(block)
   const { updateBlock, setPageNotes, setGlobalNotes } = useStore.getState()
@@ -38,7 +39,7 @@ export function NotesPanel() {
           </label>
         </>
       ) : (
-        <p className="text-xs text-neutral-400">Click a section of the page to rearrange what's inside it or add notes.</p>
+        <p className="text-xs text-neutral-400">Click a block to select it and add notes. Double-click to edit inside.</p>
       )}
 
       <SectionLabel>Page · {page.name}</SectionLabel>

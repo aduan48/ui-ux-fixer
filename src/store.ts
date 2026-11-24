@@ -1,8 +1,9 @@
 import { del, get as idbGet, set as idbSet } from 'idb-keyval'
 import { create } from 'zustand'
 import { buildCurrentPages } from './lib/currentPages'
-import { contentBottom, flowPositions, FRAMES, frameWidthOf, heightFrom } from './lib/layout'
+import { contentBottom, fitToFrame, flowPositions, FRAMES, frameWidthOf, heightFrom, restack, type Restack } from './lib/layout'
 import { migrateProject, PROJECT_VERSION } from './lib/projectFile'
+import { PLACEHOLDER_WIDTHS } from './lib/placeholders'
 import { createJSONStorage, persist, type StateStorage } from 'zustand/middleware'
 import { blockNode } from './lib/render'
 import type { BankItem, Block, BrandToken, Page, Project, ScannedComponent, SourceFile, StaticNode, TokenKind, TokenRole } from './types'
@@ -31,7 +32,8 @@ const emptyProject = (): Project => ({
 interface State {
   project: Project
   activePageId: string
-  selectedBlockId: string | null
+  /** Selected canvas blocks (several with Shift or a marquee). */
+  selectedIds: string[]
   /** Block whose inside is being rearranged in its preview, and the element picked in it. */
   editingBlockId: string | null
   selectedElementPath: string | null
@@ -67,8 +69,13 @@ interface State {
   /** Place a block from the bank with its top-left at `at` (page px; below the content if omitted). Freezes a flow page. */
   addBlock: (item: BankItem, at?: { x: number; y: number }) => void
   updateBlock: (blockId: string, patch: Partial<Omit<Block, 'id'>>) => void
-  deleteBlock: (blockId: string) => void
-  selectBlock: (blockId: string | null) => void
+  /** Set block geometry (x, y, w, height) by id. Freezes a flow page first. */
+  placeBlocks: (patches: Record<string, Partial<Pick<Block, 'x' | 'y' | 'w' | 'height'>>>) => void
+  deleteBlocks: (ids: string[]) => void
+  /** Copies 16px down-right, on top; the copies become the selection. */
+  duplicateBlocks: (ids: string[]) => void
+  restackBlocks: (ids: string[], dir: Restack) => void
+  select: (ids: string[]) => void
   setMeasured: (blockId: string, height: number) => void
 
   startEditing: (blockId: string) => void
@@ -118,11 +125,20 @@ export const useStore = create<State>()(
           },
         }))
 
+      // Geometry edits first freeze a flow page's computed layout (original snapshot included, so the brief can compare).
+      const editFrozen = (fn: (p: Page) => Page) => {
+        const heightOf = heightFrom(get().measured)
+        editActivePage(p => {
+          const fw = frameWidthOf(p)
+          return fn(p.flow ? { ...p, flow: false, blocks: flowPositions(p.blocks, fw, heightOf), original: p.original && flowPositions(p.original, fw, heightOf) } : p)
+        })
+      }
+
       const initial = emptyProject()
       return {
         project: initial,
         activePageId: initial.pages[0].id,
-        selectedBlockId: null,
+        selectedIds: [],
         editingBlockId: null,
         selectedElementPath: null,
         editMode: 'free',
@@ -142,17 +158,17 @@ export const useStore = create<State>()(
             tokens,
             ...(pages.length && { pages }),
           }
-          set({ project, activePageId: project.pages[0].id, selectedBlockId: null, editingBlockId: null, selectedElementPath: null })
+          set({ project, activePageId: project.pages[0].id, selectedIds: [], editingBlockId: null, selectedElementPath: null })
         },
         loadProject: project =>
-          set({ project, activePageId: project.pages[0].id, selectedBlockId: null, editingBlockId: null, selectedElementPath: null }),
+          set({ project, activePageId: project.pages[0].id, selectedIds: [], editingBlockId: null, selectedElementPath: null }),
 
         addPage: () => {
           const page = newPage(`Page ${get().project.pages.length + 1}`)
           set(s => ({
             project: { ...s.project, pages: [...s.project.pages, page] },
             activePageId: page.id,
-            selectedBlockId: null,
+            selectedIds: [],
           }))
         },
         renamePage: (pageId, name) =>
@@ -167,41 +183,49 @@ export const useStore = create<State>()(
             if (s.project.pages.length === 1) return s // always keep one page
             const pages = s.project.pages.filter(p => p.id !== pageId)
             const activePageId = s.activePageId === pageId ? pages[0].id : s.activePageId
-            return { project: { ...s.project, pages }, activePageId, selectedBlockId: null }
+            return { project: { ...s.project, pages }, activePageId, selectedIds: [] }
           }),
-        setActivePage: activePageId => set({ activePageId, selectedBlockId: null, editingBlockId: null, selectedElementPath: null }),
+        setActivePage: activePageId => set({ activePageId, selectedIds: [], editingBlockId: null, selectedElementPath: null }),
         setPageNotes: notes => editActivePage(p => ({ ...p, notes })),
-        setFrameWidth: frameWidth => editActivePage(p => ({ ...p, frameWidth })),
+        // Flow pages clamp as they lay out; positioned blocks are clamped once (switching back doesn't re-widen them).
+        setFrameWidth: frameWidth => editActivePage(p => ({ ...p, frameWidth, blocks: p.flow ? p.blocks : fitToFrame(p.blocks, frameWidth) })),
 
         addBlock: (item, at) => {
-          const heightOf = heightFrom(get().measured)
           const blockId = id()
-          editActivePage(p => {
+          editFrozen(p => {
             const fw = frameWidthOf(p)
-            // The first positioned edit freezes the computed flow layout, original snapshot included, so the brief can compare.
-            const frozen = p.flow
-              ? { ...p, flow: false, blocks: flowPositions(p.blocks, fw, heightOf), original: p.original && flowPositions(p.original, fw, heightOf) }
-              : p
-            const w = fw // shortcut: new blocks span the frame until M2 adds resizing
-            const { x, y } = at ?? { x: 0, y: contentBottom(frozen.blocks, heightOf) }
+            const w = Math.min(fw, (item.kind === 'placeholder' && PLACEHOLDER_WIDTHS[item.placeholder]) || fw) // sections span the frame
+            const { x, y } = at ?? { x: 0, y: contentBottom(p.blocks, heightFrom(get().measured)) }
             const block: Block = { id: blockId, notes: '', ...item, w, x: Math.round(Math.min(Math.max(0, x), fw - w)), y: Math.round(Math.max(0, y)) }
-            return { ...frozen, blocks: [...frozen.blocks, block] }
+            return { ...p, blocks: [...p.blocks, block] }
           })
-          set({ selectedBlockId: blockId })
+          set({ selectedIds: [blockId] })
         },
+        placeBlocks: patches =>
+          editFrozen(p => ({ ...p, blocks: p.blocks.map(b => (patches[b.id] ? { ...b, ...patches[b.id] } : b)) })),
+        duplicateBlocks: ids => {
+          const copies: Block[] = []
+          editFrozen(p => {
+            for (const b of p.blocks) if (ids.includes(b.id)) copies.push({ ...b, id: id(), x: b.x + 16, y: b.y + 16 })
+            return { ...p, blocks: [...p.blocks, ...copies] }
+          })
+          set({ selectedIds: copies.map(b => b.id) })
+        },
+        restackBlocks: (ids, dir) => editFrozen(p => ({ ...p, blocks: restack(p.blocks, ids, dir) })),
         updateBlock: (blockId, patch) =>
           editActivePage(p => ({
             ...p,
             blocks: p.blocks.map(b => (b.id === blockId ? { ...b, ...patch } : b)),
           })),
-        deleteBlock: blockId => {
-          editActivePage(p => ({ ...p, blocks: p.blocks.filter(b => b.id !== blockId) }))
-          if (get().selectedBlockId === blockId) set({ selectedBlockId: null, editingBlockId: null, selectedElementPath: null })
+        deleteBlocks: ids => {
+          editActivePage(p => ({ ...p, blocks: p.blocks.filter(b => !ids.includes(b.id)) }))
+          get().select(get().selectedIds.filter(i => !ids.includes(i)))
         },
-        selectBlock: selectedBlockId =>
+        select: selectedIds =>
           set(s => ({
-            selectedBlockId,
-            ...(s.editingBlockId !== selectedBlockId && { editingBlockId: null, selectedElementPath: null }),
+            selectedIds,
+            // Editing ends as soon as anything but the edited block alone is selected.
+            ...(!(selectedIds.length === 1 && selectedIds[0] === s.editingBlockId) && { editingBlockId: null, selectedElementPath: null }),
           })),
 
         addToken: kind => {
@@ -225,7 +249,7 @@ export const useStore = create<State>()(
 
         setMeasured: (blockId, height) => set(s => (s.measured[blockId] === height ? s : { measured: { ...s.measured, [blockId]: height } })),
 
-        startEditing: blockId => set({ selectedBlockId: blockId, editingBlockId: blockId, selectedElementPath: null }),
+        startEditing: blockId => set({ selectedIds: [blockId], editingBlockId: blockId, selectedElementPath: null }),
         stopEditing: () => set({ editingBlockId: null, selectedElementPath: null }),
         setEditMode: editMode => set({ editMode }),
         selectElement: selectedElementPath => set({ selectedElementPath }),

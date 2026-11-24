@@ -2,7 +2,7 @@ import type { BrandToken } from '../types'
 
 /** Relative luminance (0 black … 1 white) of a hex or rgb() colour; undefined for other formats. */
 export function luminance(c: string): number | undefined {
-  const hex = c.trim().match(/^#([0-9a-f]{3}|[0-9a-f]{6})/i)
+  const hex = c.trim().match(/^#([0-9a-f]{6}|[0-9a-f]{3})(?![0-9a-f])/i) // 6 first: "#4f46e5" must not match as "#4f4"
   let rgb: number[] | undefined
   if (hex) {
     const h = hex[1].length === 3 ? [...hex[1]].map(x => x + x).join('') : hex[1]

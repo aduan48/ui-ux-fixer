@@ -6,7 +6,8 @@ import { useStore } from '../store'
 
 export function ExportModal({ onClose }: { onClose: () => void }) {
   const project = useStore(s => s.project)
-  const prompt = useMemo(() => buildPrompt(project), [project])
+  const measured = useStore(s => s.measured)
+  const prompt = useMemo(() => buildPrompt(project, measured), [project, measured])
   const [copied, setCopied] = useState<'idle' | 'done' | 'failed'>('idle')
 
   useEffect(() => {

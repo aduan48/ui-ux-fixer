@@ -41,7 +41,7 @@ function sketchedProject(): Project {
 }
 
 describe('buildPrompt', () => {
-  const prompt = buildPrompt(sketchedProject())
+  const prompt = buildPrompt(sketchedProject(), {})
 
   it('opens with instructions for the agent', () => {
     expect(prompt).toMatch(/^# UI redesign brief: Sample\n/)
@@ -79,7 +79,7 @@ it('lists removed pieces, not containers whose children were merely reordered', 
   const p = sketchedProject()
   const hero = p.pages[0].blocks[1]
   hero.tree = removeNode(hero.tree!, '0') // image was moved first; now drop it
-  const brief = buildPrompt(p)
+  const brief = buildPrompt(p, {})
   expect(brief).toContain('- Remove: img')
   expect(brief).not.toContain('Remove: section')
 })
@@ -90,7 +90,7 @@ it('describes free-form moves in words, without a structure dump when only posit
   const hero = p.pages[0].blocks[1]
   const heroTree = p.components.find(c => c.name === 'Hero')!.tree!
   hero.tree = setOffset(setOffset(heroTree, '0', { x: 40, y: -24 }), '2', { x: 0, y: 16 })
-  const brief = buildPrompt(p)
+  const brief = buildPrompt(p, {})
   expect(brief).toContain('**Reposition** (placed by hand in the sketch, measured on a 1440px-wide page).')
   expect(brief).toContain('- `h1 “{title}”`: about 40px right and 24px up from where it sits now')
   expect(brief).toContain('- `button.btn-primary “{ctaLabel}”`: about 16px down from where it sits now')

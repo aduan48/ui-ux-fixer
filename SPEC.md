@@ -8,6 +8,10 @@ Replaces the vertical-stack canvas with a Figma-style freeform canvas. `CLAUDE.m
 - **react-moveable + selecto** for drag, resize, group selection, grid snap and alignment guides, on real DOM elements (no `<canvas>`). dnd-kit stays only for dragging bank tiles onto the canvas.
 - **PNG export inside the frames.** Previews are `sandbox="allow-scripts"` without same-origin, so the app can't read their DOM and html-to-image can't see them. Each preview snapshots itself with html-to-image and posts the PNG back; the app composites them on a 2D canvas at block positions. Never add `allow-same-origin`.
 
+## UI principles
+
+The app's own UI stays simple, elegant and obvious: neutral greys, 1px borders, 13px text, few controls, no settings. Every feature should be usable without explanation (select, drag, resize, shortcuts that match Figma). Prefer removing a control to adding one. The milestone reviewer checks this from screenshots.
+
 ## Canvas
 
 - Pan and zoom: one CSS transform (`translate + scale`) on the world layer. Wheel/trackpad pans, ⌘/Ctrl + wheel (pinch) zooms around the cursor, Space-drag or middle-drag pans. Toolbar: zoom out / in, percentage (click for 100%), Fit.
@@ -19,6 +23,7 @@ Replaces the vertical-stack canvas with a Figma-style freeform canvas. `CLAUDE.m
 
 ## Components
 
+- Placeholder blocks (Text, Image, Button, Spacer, Columns) are NEW pieces drawn on brand: semantic markup (`lib/placeholders.ts`) rendered in the same preview iframe as components, so the project's CSS applies, with the brand roles (heading/body font, primary color, radius) filling in. Their typography defaults sit in a late cascade layer (`@layer sk-new`): they beat Tailwind's reset but lose to any unlayered project rule. A NEW badge marks them as not built yet; the bank calls them "New blocks". Button and Image drop at a sensible width; the rest span the frame.
 - Attach a screenshot to any component (M5): stored in `project.assets` (≤1.5 MB, data URL), used as its preview.
 
 ## Prompt export

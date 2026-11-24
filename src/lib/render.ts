@@ -488,6 +488,10 @@ const BACKDROP_SCRIPT = `(() => {
     while (walker.nextNode()) {
       const node = walker.currentNode, n = node.textContent.trim().length
       if (!n || !node.parentElement || /^(SCRIPT|STYLE|NOSCRIPT|TEMPLATE)$/.test(node.parentElement.tagName)) continue
+      // Text on its own background (a filled button, a badge) is legible already: it says nothing about the page.
+      let own = false
+      for (let el = node.parentElement; el && el !== document.body && !own; el = el.parentElement) own = !clear(getComputedStyle(el))
+      if (own) continue
       total += n
       if (lum(getComputedStyle(node.parentElement).color) > 0.75) light += n
     }

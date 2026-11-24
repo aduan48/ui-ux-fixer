@@ -8,6 +8,7 @@ const tok = (value: string, roles?: BrandToken['roles']): BrandToken => ({ id: v
 it('measures luminance of hex and rgb colours', () => {
   expect(luminance('#ffffff')).toBeCloseTo(1)
   expect(luminance('#000')).toBe(0)
+  expect(luminance('#4f46e5')).toBeCloseTo(0.117, 2) // six digits, not read as #4f4
   expect(luminance('rgb(0, 40, 119)')).toBeLessThan(0.05)
   expect(luminance('oklch(50% 0.1 200)')).toBeUndefined()
 })
