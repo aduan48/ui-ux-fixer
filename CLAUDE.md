@@ -1,6 +1,6 @@
 # SketchKit
 
-Static web app (GitHub Pages) for sketching UI redesigns of an existing project. A freeform-canvas rework is in progress: see `SPEC.md` for the plan and milestones; this file describes what has landed. The user imports a codebase, gets a bank of its components and brand tokens, wireframes pages from them on a canvas, and exports a Markdown prompt for a coding agent. Everything runs client-side; there is no server.
+Static web app (GitHub Pages) for sketching UI redesigns of an existing project. The user imports a codebase, gets a bank of its components and brand tokens, lays pages out from them on a Figma-style freeform canvas (real renders, pan/zoom, page frames), and exports a Markdown brief for a coding agent, with a PNG of each page. Everything runs client-side; there is no server.
 
 ## Commands
 
@@ -10,7 +10,7 @@ Static web app (GitHub Pages) for sketching UI redesigns of an existing project.
 
 ## Stack
 
-Vite + React 19 + TypeScript, Tailwind v4 (via `@tailwindcss/vite`, theme in `src/index.css`, no config file), dnd-kit, Zustand, lucide-react icons.
+Vite + React 19 + TypeScript, Tailwind v4 (via `@tailwindcss/vite`, theme in `src/index.css`, no config file), Zustand, lucide-react icons. Canvas: react-moveable + react-selecto (drag, resize, select, snap) and dnd-kit (bank drops only). Export: html-to-image (runs inside preview frames) and fflate (the .zip).
 
 ## Layout
 
@@ -41,7 +41,9 @@ Vite + React 19 + TypeScript, Tailwind v4 (via `@tailwindcss/vite`, theme in `sr
 - Canvas shortcuts (ignored while typing or editing inside): Delete/Backspace, ⌘D duplicate (+16px), ⌘] / ⌘[ forward / backward (Shift: front / back; `restack` in `lib/layout.ts`), ⌘A, Esc. Switching frame presets clamps positioned blocks into the frame (`fitToFrame`).
 - Synthetic browser tests: Moveable reacts to stepped `pointer*`/`mouse*` events (down on the target, moves and up on `window`); Selecto needs real mouse input (the drag tool) for marquees. Dispatch shortcut keydowns on `document.body`, not `window`.
 - Only CSS (`project.styles`, url()s inlined) and images (`project.assets`, data URLs, ≤1.5 MB each) are stored. Never store JS/TSX source; store scan results. Trees refer to images as `@asset:<path>`, and to dynamic attribute values as `@expr:<prop>` (filled from passed props at render time).
-- Keep the app's own UI minimal: neutral greys, 1px borders, 13px text, wireframe look.
+- Keep the app's own UI simple, elegant and obvious: neutral greys, 1px borders, 13px text, few controls, no settings. Features should work without explanation (Figma conventions: click/Shift/marquee select, drag, handles, standard shortcuts). Prefer removing a control to adding one.
+- Everything renders for real: components (HTML or React) render their scanned markup in sandboxed previews, NEW blocks render on-brand markup, and a component that won't render can show an attached screenshot. No wireframe fallbacks, no `<canvas>` drawing of blocks.
+- Previews stay `sandbox="allow-scripts"` without `allow-same-origin`: the app never reads their DOM. Anything that needs their content (heights, editor intents, PNGs) is posted out by a script inside the frame.
 - Read store actions with `useStore.getState()` in event handlers; subscribe with selectors only for data you render.
 - Testing drag-and-drop with browser automation: one-jump synthetic drags don't trigger dnd-kit drops. Dispatch stepped `pointermove` events instead.
 - `vite.config.ts` uses `base: './'`; there is no router, so the app works under any GitHub Pages path.
@@ -78,5 +80,7 @@ Vite + React 19 + TypeScript, Tailwind v4 (via `@tailwindcss/vite`, theme in `sr
 - `lib/prompt.ts` (`buildPrompt`) writes the Markdown brief: agent instructions, project/stack, brand rules (roles first), overall notes, then each page's target layout (`inferLayout` in `lib/layout.ts` cuts the drawn positions into sections, rows of columns and stacks, recursively, with `layered` groups for blocks that overlap on both axes; the brief words it as layout: widths as twelfths of the frame, gaps in px named after the nearest spacing token, alignment (rows: top/center/bottom; stacks: left/center/right; sections: placement in the frame), space between sections; never coordinates; "reuse `path`" vs "NEW"; props; rearranged structure with the current structure for comparison and removed leaf pieces; notes), the page's current layout from `page.original`, and a list of new things to build. Imported pages whose blocks (matched by id, so z-order doesn't count) sit where they were, with no edits or notes, collapse to "No layout changes". Each page says which frame it was sketched on.
 - Element labels (`labelAt` in `lib/render.ts`) are tag + id or first non-utility class + text, or the components a wrapper contains. They appear in the layers panel, bank and brief, so keep them meaningful.
 - Pages rebuilt from an import keep `route`, `componentId` and `original` (a snapshot of their blocks) so the brief can describe changes.
+- Screenshots: a component can carry an attached image (inspector "Preview image"; ≤1.5 MB) stored in `project.assets` under `screenshotKey(componentId)`. `blockHtml` (`lib/render.ts`, the one place that decides what a block shows) uses it instead of the live render for whole, unedited component blocks; those blocks have no edit-inside.
+- Export (`ExportModal`): Copy gives the brief alone. "Download .zip with images" saves one zip (fflate) with the brief and a `pageImageName` PNG per page; pages render one after another. `buildPrompt(…, imaged)` gets the ids of pages whose PNG rendered, points to those images and says the text wins over them; if rendering can't load at all, the brief is saved alone. `lib/snapshot.ts` (`pagePng`, loaded with `await import()`) renders each block in its own hidden sandboxed iframe with `previewDoc(…, { snapshotUrl })`; the frame runs html-to-image on itself and posts `{ skPng, skHeight }`, and the app composites the PNGs on a canvas at the block positions. Snapshot frames must sit inside the viewport (invisible): Chrome pauses animation frames in offscreen cross-origin frames and html-to-image waits on one.
 - `lib/projectFile.ts`: `.sketchkit.json` save/open (`serializeProject` / `parseProjectFile`) and `migrateProject`, shared with the IndexedDB persist migration. Bump `PROJECT_VERSION` and extend `migrateProject` together.
 - SketchKit never writes to the imported project: import is read-only and all output is text (the brief or a project file).

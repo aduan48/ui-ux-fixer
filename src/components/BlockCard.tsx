@@ -1,8 +1,7 @@
 import { Check, MoveVertical, MessageSquareText, MousePointer2, RotateCcw, Trash2 } from 'lucide-react'
 import { useMemo } from 'react'
 import { placeholderMeta } from '../lib/catalog'
-import { placeholderHtml } from '../lib/placeholders'
-import { labelAt, renderBlock } from '../lib/render'
+import { blockHtml, labelAt, screenshotOf } from '../lib/render'
 import { useStore } from '../store'
 import type { Block } from '../types'
 import { Preview } from './Preview'
@@ -28,10 +27,9 @@ export function BlockCard({ block, placed }: { block: Block; placed: Pick<Block,
   const { deleteBlocks, updateBlock, startEditing, stopEditing, resetBlockTree } = useStore.getState()
   const title = useBlockTitle(block)
   const isNew = block.kind === 'placeholder'
-  const html = useMemo(
-    () => (isNew ? placeholderHtml(block.placeholder!, tokens) : renderBlock(block, components, assets)),
-    [isNew, block, components, assets, tokens],
-  )
+  const html = useMemo(() => blockHtml(block, { components, assets, tokens }), [block, components, assets, tokens])
+  // Only live renders can be edited inside: not NEW blocks, not a component shown as its screenshot.
+  const live = !!html && !isNew && !screenshotOf(block, assets)
 
   const ring = editing ? 'ring-2 ring-violet-500' : selected ? 'ring-2 ring-blue-500' : 'group-hover:ring-1 group-hover:ring-blue-400'
   // Hidden for a group selection: Moveable's group area covers the blocks, so the toolbar couldn't be clicked.
@@ -40,7 +38,7 @@ export function BlockCard({ block, placed }: { block: Block; placed: Pick<Block,
   return (
     <div
       data-block-id={block.id}
-      data-editable={html && !isNew ? '' : undefined}
+      data-editable={live ? '' : undefined}
       style={{ left: placed.x, top: placed.y, width: placed.w, height: block.height }}
       // select-none: a double-click (enter editing) must not select the iframe as text, which greys it and hijacks the next drag
       // No z-index here: array order is the stacking order. The chip and toolbar lift themselves (z-20) instead.
@@ -92,7 +90,7 @@ export function BlockCard({ block, placed }: { block: Block; placed: Pick<Block,
           </>
         ) : (
           <>
-            {html && !isNew && <ToolButton onClick={() => startEditing(block.id)} icon={MousePointer2} label="Edit inside" />}
+            {live && <ToolButton onClick={() => startEditing(block.id)} icon={MousePointer2} label="Edit inside" />}
             {block.height && <ToolButton onClick={() => updateBlock(block.id, { height: undefined })} icon={MoveVertical} label="Fit height" />}
             <button onClick={() => deleteBlocks([block.id])} aria-label="Delete block" className="rounded p-1 text-neutral-500 hover:bg-red-50 hover:text-red-600">
               <Trash2 className="size-3.5" />

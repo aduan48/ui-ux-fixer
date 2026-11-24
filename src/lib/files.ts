@@ -4,7 +4,7 @@ const IGNORED_DIRS = new Set(['node_modules', 'dist', 'build', '.git', '.next', 
 const TEXT_EXT = /\.(jsx?|tsx?|mjs|cjs|html?|css|scss)$/i
 const IMAGE_EXT = /\.(png|jpe?g|gif|svg|webp|avif|ico)$/i
 const MAX_TEXT_BYTES = 500_000
-const MAX_IMAGE_BYTES = 1_500_000
+export const MAX_IMAGE_BYTES = 1_500_000
 
 export interface ReadResult {
   /** Text files as text; images as data URLs (used by previews). */

@@ -125,7 +125,7 @@ export function Canvas() {
     setOthers(all.filter(el => !sel(el)))
   }, [selectedIds, editingId, page.blocks])
   // Its boxes are cached: refresh after anything that moves or resizes the targets.
-  useLayoutEffect(() => moveableRef.current?.updateRect(), [view, blocks, targets])
+  useLayoutEffect(() => moveableRef.current?.updateRect(), [view, blocks, targets, measured])
 
   /** Store the final geometry of a drag or resize (Moveable only styled the DOM meanwhile). */
   const commit = (ends: (OnDragEnd | OnResizeEnd)[]) => {

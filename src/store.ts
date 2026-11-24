@@ -6,7 +6,7 @@ import { migrateProject, PROJECT_VERSION } from './lib/projectFile'
 import { createHistory } from './lib/history'
 import { PLACEHOLDER_WIDTHS } from './lib/placeholders'
 import { createJSONStorage, persist, type StateStorage } from 'zustand/middleware'
-import { blockNode } from './lib/render'
+import { blockNode, screenshotKey } from './lib/render'
 import type { BankItem, Block, BrandToken, Page, Project, ScannedComponent, SourceFile, StaticNode, TokenKind, TokenRole } from './types'
 
 const id = () => crypto.randomUUID()
@@ -57,6 +57,8 @@ interface State {
   deleteToken: (id: string) => void
   /** Toggle a role on a token; giving it takes the role from whichever token had it. */
   toggleTokenRole: (id: string, role: TokenRole) => void
+  /** Attach (or with null, remove) a screenshot shown instead of a component's live render. */
+  setScreenshot: (componentId: string, dataUrl: string | null) => void
   /** Replace everything with a project opened from a file. */
   loadProject: (project: Project) => void
 
@@ -180,6 +182,11 @@ export const useStore = create<State>()(
           }
           set({ project, activePageId: project.pages[0].id, selectedIds: [], editingBlockId: null, selectedElementPath: null })
         },
+        setScreenshot: (componentId, dataUrl) =>
+          set(s => {
+            const { [screenshotKey(componentId)]: _, ...assets } = s.project.assets
+            return { project: { ...s.project, assets: dataUrl ? { ...assets, [screenshotKey(componentId)]: dataUrl } : assets } }
+          }),
         loadProject: project =>
           set({ project, activePageId: project.pages[0].id, selectedIds: [], editingBlockId: null, selectedElementPath: null }),
 

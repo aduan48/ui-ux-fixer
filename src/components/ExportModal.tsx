@@ -1,7 +1,7 @@
 import { Check, Copy, Download, X } from 'lucide-react'
 import { useEffect, useMemo, useState } from 'react'
-import { downloadText } from '../lib/download'
-import { buildPrompt, promptFileName } from '../lib/prompt'
+import { downloadBlob, downloadText } from '../lib/download'
+import { buildPrompt, pageImageName, promptFileName } from '../lib/prompt'
 import { useStore } from '../store'
 
 export function ExportModal({ onClose }: { onClose: () => void }) {
@@ -9,6 +9,31 @@ export function ExportModal({ onClose }: { onClose: () => void }) {
   const measured = useStore(s => s.measured)
   const prompt = useMemo(() => buildPrompt(project, measured), [project, measured])
   const [copied, setCopied] = useState<'idle' | 'done' | 'failed'>('idle')
+  const [saving, setSaving] = useState<'idle' | 'busy' | 'failed'>('idle')
+
+  /** One .zip: the brief plus a PNG of each sketched page (one file, so browsers can't drop any of it). */
+  const download = async () => {
+    setSaving('busy')
+    const files: Record<string, Uint8Array> = {}
+    const imaged = new Set<string>()
+    try {
+      const [{ pagePng }, { strToU8, zipSync }] = await Promise.all([import('../lib/snapshot'), import('fflate')])
+      // One page at a time: each block runs its own Tailwind compiler, so all pages at once can overload a laptop.
+      for (const page of project.pages) {
+        const png = await pagePng(page, project).catch(() => undefined)
+        if (!png) continue
+        files[pageImageName(project, page)] = new Uint8Array(await png.arrayBuffer())
+        imaged.add(page.id)
+      }
+      files[promptFileName(project)] = strToU8(buildPrompt(project, measured, imaged))
+      downloadBlob(promptFileName(project).replace(/\.md$/, '.zip'), new Blob([zipSync(files)], { type: 'application/zip' }))
+      setSaving(project.pages.every(p => !p.blocks.length || imaged.has(p.id)) ? 'idle' : 'failed')
+    } catch {
+      // Couldn't load the renderer or the zip library: still save the brief on its own.
+      downloadText(promptFileName(project), prompt, 'text/markdown')
+      setSaving('failed')
+    }
+  }
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => e.key === 'Escape' && onClose()
@@ -53,15 +78,21 @@ export function ExportModal({ onClose }: { onClose: () => void }) {
             {copied === 'done' ? 'Copied' : copied === 'failed' ? 'Copy failed, select below' : 'Copy'}
           </button>
           <button
-            onClick={() => downloadText(promptFileName(project), prompt, 'text/markdown')}
-            className="flex items-center gap-1.5 rounded-md border border-neutral-200 px-3 py-1.5 text-[13px] font-medium text-neutral-700 hover:bg-neutral-50"
+            onClick={download}
+            disabled={saving === 'busy'}
+            className="flex items-center gap-1.5 rounded-md border border-neutral-200 px-3 py-1.5 text-[13px] font-medium text-neutral-700 hover:bg-neutral-50 disabled:opacity-60"
           >
-            <Download className="size-3.5" /> .md
+            <Download className="size-3.5" /> {saving === 'busy' ? 'Rendering pages…' : 'Download .zip with images'}
           </button>
           <button onClick={onClose} aria-label="Close" className="rounded p-1 text-neutral-500 hover:bg-neutral-100">
             <X className="size-4" />
           </button>
         </div>
+        {saving === 'failed' && (
+          <p className="mx-4 mt-3 rounded-md bg-amber-50 px-3 py-2 text-[13px] text-amber-800">
+            Some page images couldn't be rendered. The brief was saved without them.
+          </p>
+        )}
         {!hasContent && (
           <p className="mx-4 mt-3 rounded-md bg-amber-50 px-3 py-2 text-[13px] text-amber-800">
             Your pages are empty, so the prompt only has the brand rules. Import a project or add blocks first.

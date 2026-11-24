@@ -125,3 +125,12 @@ it('says how stacked items line up', () => {
   Object.assign(p.pages[0], { flow: false, blocks: [{ ...ph('a', 0, 0, 400), height: 216 }, ph('h', 600, 0, 400), ph('b', 700, 116, 200)] }) // a spans both stacked blocks
   expect(buildPrompt(p, {})).toContain('right: stacked top to bottom, 16px (`1rem`) apart, centered:')
 })
+
+it('points to the page images when they ship with the brief', () => {
+  const p = sketchedProject()
+  const brief = buildPrompt(p, {}, new Set([p.pages[0].id]))
+  expect(brief).toContain('use the text as the exact spec')
+  expect(brief).toContain('**Sketch image:** `sample-home.png`')
+  expect(brief).not.toContain('`sample-about.png`') // its image didn't render
+  expect(buildPrompt(p, {})).not.toContain('Sketch image')
+})

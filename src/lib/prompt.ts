@@ -288,8 +288,11 @@ function stackLine(project: Project): string {
   return parts.join(' · ')
 }
 
-/** The full Markdown brief for a coding agent. `measured`: preview heights by block id, for grouping rows. */
-export function buildPrompt(project: Project, measured: Record<string, number>): string {
+/**
+ * The full Markdown brief for a coding agent. `measured`: preview heights by block id, for reading the layout.
+ * `imaged`: ids of pages whose PNG ships with the brief (named by `pageImageName`), so point to them.
+ */
+export function buildPrompt(project: Project, measured: Record<string, number>, imaged: Set<string> = new Set()): string {
   const heightOf = heightFrom(measured)
   const L: string[] = []
   const pages = project.pages.filter(p => p.blocks.length || p.notes.trim())
@@ -312,6 +315,12 @@ export function buildPrompt(project: Project, measured: Record<string, number>):
     '',
   )
 
+  if (imaged.size)
+    L.push(
+      '**Page images.** Each page below comes with a PNG of the sketch (file named in its section). Use it as a visual reference for proportions, spacing and feel; use the text as the exact spec. Where they disagree, the text wins.',
+      '',
+    )
+
   L.push('## Project', '')
   L.push(`- Stack: ${stackLine(project)}`)
   if (project.source) L.push(`- Source: ${project.source}`)
@@ -332,6 +341,7 @@ export function buildPrompt(project: Project, measured: Record<string, number>):
     const frame = FRAMES.find(f => f.width === frameWidthOf(page))
     meta.push(`sketched on a ${frameWidthOf(page)}px ${frame ? frame.label.toLowerCase() + ' ' : ''}frame`)
     if (meta.length) L.push(meta.join(', ').replace(/^./, c => c.toUpperCase()) + '.', '')
+    if (imaged.has(page.id)) L.push(`**Sketch image:** ${code(pageImageName(project, page))}`, '')
     if (page.notes.trim()) L.push(`**Page notes:** ${page.notes.trim()}`, '')
 
     if (page.original && sameLayout(page.blocks, page.original)) {
@@ -348,7 +358,10 @@ export function buildPrompt(project: Project, measured: Record<string, number>):
   return L.join('\n').replace(/\n{3,}/g, '\n\n').trim() + '\n'
 }
 
-/** A safe file name for the download. */
-export const promptFileName = (project: Project) =>
-  `${project.name.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '') || 'sketchkit'}-brief.md`
+const slug = (s: string) => s.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '')
+
+/** Safe file names for the downloads. */
+export const promptFileName = (project: Project) => `${slug(project.name) || 'sketchkit'}-brief.md`
+export const pageImageName = (project: Project, page: Page) =>
+  `${slug(project.name) || 'sketchkit'}-${slug(page.name) || project.pages.indexOf(page) + 1}.png`
 

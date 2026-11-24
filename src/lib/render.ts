@@ -1,4 +1,5 @@
-import type { Block, Offset, ScannedComponent, SourceFile, StaticNode } from '../types'
+import type { Block, Offset, Project, ScannedComponent, SourceFile, StaticNode } from '../types'
+import { placeholderHtml } from './placeholders'
 
 // ---------- Inner elements ----------
 
@@ -205,6 +206,21 @@ export function blockNode(block: Block, components: ScannedComponent[]): StaticN
   if (block.tree) return block.tree
   const c = components.find(x => x.id === block.componentId)
   return block.kind === 'element' ? nodeAt(c?.tree, block.elementPath!) : c?.tree
+}
+
+/** Where a component's attached screenshot lives in `project.assets`. */
+export const screenshotKey = (componentId: string) => `screenshot:${componentId}`
+
+/** The component screenshot standing in for a block's live render, if any (whole, unedited components only). */
+export const screenshotOf = (block: Block, assets: Record<string, string>) =>
+  block.kind === 'component' && !block.tree ? assets[screenshotKey(block.componentId!)] : undefined
+
+/** What a block's preview shows: a NEW block's on-brand markup, an attached screenshot, or the component's render. */
+export function blockHtml(block: Block, project: Pick<Project, 'components' | 'assets' | 'tokens'>): string | undefined {
+  if (block.kind === 'placeholder') return placeholderHtml(block.placeholder!, project.tokens)
+  const shot = screenshotOf(block, project.assets)
+  if (shot) return `<img src="${shot.replace(/"/g, '%22')}" alt="" style="display:block;width:100%">`
+  return renderBlock(block, project.components, project.assets)
 }
 
 /**
@@ -511,7 +527,20 @@ export interface PreviewOptions {
   editable?: boolean
   /** Colour shown behind light content that has no background of its own (the site's dark tone). */
   backdrop?: string
+  /** URL of html-to-image: render once, then post the page as a PNG ({ skPng, skHeight }) and stop. */
+  snapshotUrl?: string
 }
+
+// After the backdrop check (≤500 ms) and webfonts, so the image matches the canvas.
+const SNAPSHOT_SCRIPT = `addEventListener('load', async () => {
+  await document.fonts.ready
+  await new Promise(r => setTimeout(r, 700))
+  const height = Math.ceil(document.body.getBoundingClientRect().height)
+  try {
+    const png = await htmlToImage.toPng(document.documentElement, { width: innerWidth, height, pixelRatio: 1 })
+    parent.postMessage({ skPng: png, skHeight: height }, '*')
+  } catch (e) { parent.postMessage({ skPng: null, skError: String(e) }, '*') }
+})`
 
 /**
  * A standalone HTML page for one block's iframe. Stylesheets using Tailwind directives go
@@ -556,5 +585,6 @@ sk-box{all:initial;position:absolute;pointer-events:none;z-index:2147483647;disp
 <script>new ResizeObserver(()=>parent.postMessage({skHeight:Math.ceil(document.body.getBoundingClientRect().height)},'*')).observe(document.body)</script>
 ${backdrop}
 ${editor}
+${opts.snapshotUrl ? `<script src="${opts.snapshotUrl}"></script><script>${SNAPSHOT_SCRIPT}</script>` : ''}
 </body></html>`
 }
