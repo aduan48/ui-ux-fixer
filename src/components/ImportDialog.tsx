@@ -1,6 +1,5 @@
 import { FolderOpen, Loader2, X } from 'lucide-react'
 import { useEffect, useRef, useState } from 'react'
-import { buildCurrentPages } from '../lib/currentPages'
 import { readDataTransfer, readFileList, type ReadResult } from '../lib/files'
 import type { ScanResult } from '../lib/scan'
 import { useStore } from '../store'
@@ -8,8 +7,8 @@ import { useStore } from '../store'
 type Status =
   | { kind: 'idle' }
   | { kind: 'busy' }
-  | { kind: 'done'; files: number; skipped: string[]; scan: ScanResult; loadedPages: boolean }
-  | { kind: 'confirm'; files: number; skipped: string[]; scan: ScanResult; source: string; replacing: string }
+  | { kind: 'done'; files: number; skipped: string[]; scan: ScanResult; pages: string[] }
+  | { kind: 'confirm'; files: number; skipped: string[]; scan: ScanResult; source: string; replacing: string; tabs: string[] }
   | { kind: 'error'; message: string }
 
 export function ImportDialog({ onClose }: { onClose: () => void }) {
@@ -30,11 +29,11 @@ export function ImportDialog({ onClose }: { onClose: () => void }) {
       if (!files.some(f => !/\.(png|jpe?g|gif|svg|webp|avif|ico)$/i.test(f.path))) throw new Error('No .js, .jsx, .ts, .tsx, .html or .css files found in that folder.')
       const { scanProject } = await import('../lib/scan') // pulls in Babel only when needed
       const scan = scanProject(files)
-      // A different project wipes the current one; ask first if there's work to lose.
+      // Every import starts fresh (new tabs, blocks, notes, brand); ask first if there's work to lose.
       const current = useStore.getState().project
-      const hasWork = current.pages.some(p => p.blocks.length || p.notes) || current.globalNotes || current.components.length
-      if (current.source !== source && hasWork) {
-        setStatus({ kind: 'confirm', files: files.length, skipped, scan, source, replacing: current.name })
+      const hasWork = current.pages.some(p => p.blocks.length || p.notes) || current.globalNotes
+      if (hasWork) {
+        setStatus({ kind: 'confirm', files: files.length, skipped, scan, source, replacing: current.name, tabs: current.pages.map(p => p.name) })
         return
       }
       apply(scan, source, files.length, skipped)
@@ -44,11 +43,9 @@ export function ImportDialog({ onClose }: { onClose: () => void }) {
   }
 
   const apply = (scan: ScanResult, source: string, fileCount: number, skipped: string[]) => {
-    const pagesBefore = useStore.getState().project.pages
     useStore.getState().importScan(scan, source)
     const pages = useStore.getState().project.pages
-    const loadedPages = pages !== pagesBefore && pages.some(p => p.blocks.length)
-    setStatus({ kind: 'done', files: fileCount, skipped, scan, loadedPages })
+    setStatus({ kind: 'done', files: fileCount, skipped, scan, pages: pages.some(p => p.blocks.length) ? pages.map(p => p.name) : [] })
   }
 
   const onDrop = (e: React.DragEvent) => {
@@ -116,8 +113,9 @@ export function ImportDialog({ onClose }: { onClose: () => void }) {
           {status.kind === 'confirm' && (
             <div className="space-y-2 rounded-md border border-amber-200 bg-amber-50 p-3 text-[13px] text-amber-900" role="alert">
               <p>
-                <b>{status.source}</b> is a different project. Importing it replaces <b>{status.replacing}</b>: its pages, notes,
-                components and brand tokens will be removed.
+                Importing <b>{status.source}</b> replaces <b>{status.replacing}</b>. Its {status.tabs.length === 1 ? 'page' : 'pages'}{' '}
+                ({status.tabs.join(', ')}), blocks, notes and brand edits will be removed and replaced with the imported site.
+                Use <b>Save</b> first if you want to keep them.
               </p>
               <div className="flex gap-2">
                 <button
@@ -125,7 +123,7 @@ export function ImportDialog({ onClose }: { onClose: () => void }) {
                   onClick={() => apply(status.scan, status.source, status.files, status.skipped)}
                   className="rounded-md bg-amber-600 px-3 py-1.5 font-medium text-white hover:bg-amber-700"
                 >
-                  Replace project
+                  Replace and import
                 </button>
                 <button onClick={() => setStatus({ kind: 'idle' })} className="rounded-md border border-amber-300 px-3 py-1.5 font-medium hover:bg-amber-100">
                   Cancel
@@ -145,16 +143,11 @@ export function ImportDialog({ onClose }: { onClose: () => void }) {
                 <Details title={`${status.scan.failed.length} files could not be parsed`} items={status.scan.failed.map(f => `${f.path}: ${f.error}`)} />
               )}
               {status.skipped.length > 0 && <Details title={`${status.skipped.length} files skipped (over 500 KB)`} items={status.skipped} />}
-              {status.loadedPages ? (
-                <p className="text-neutral-500">Your current pages are on the canvas, ready to redesign.</p>
-              ) : buildCurrentPages(status.scan.components).length > 0 && (
-                <button
-                  onClick={() => { useStore.getState().addCurrentPages(); onClose() }}
-                  className="w-full rounded-md bg-neutral-900 py-1.5 font-medium text-white hover:bg-neutral-700"
-                >
-                  Add current site as new pages
-                </button>
-              )}
+              <p className="text-neutral-500">
+                {status.pages.length
+                  ? `Your site is on the canvas as ${status.pages.length === 1 ? '1 page' : `${status.pages.length} pages`} (${status.pages.join(', ')}), ready to redesign.`
+                  : "Couldn't work out the site's pages, so you're starting from a blank Home page. Drag components in from the left."}
+              </p>
               <button onClick={onClose} className="w-full rounded-md border border-neutral-200 py-1.5 font-medium hover:bg-neutral-50">
                 Done
               </button>

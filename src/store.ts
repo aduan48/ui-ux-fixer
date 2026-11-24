@@ -1,6 +1,7 @@
 import { del, get as idbGet, set as idbSet } from 'idb-keyval'
 import { create } from 'zustand'
 import { buildCurrentPages } from './lib/currentPages'
+import { migrateProject, PROJECT_VERSION } from './lib/projectFile'
 import { createJSONStorage, persist, type StateStorage } from 'zustand/middleware'
 import { blockNode } from './lib/render'
 import type { BankItem, Block, BrandToken, Page, Project, ScannedComponent, SourceFile, StaticNode, TokenKind, TokenRole } from './types'
@@ -10,10 +11,11 @@ const id = () => crypto.randomUUID()
 const newPage = (name: string): Page => ({ id: id(), name, notes: '', blocks: [] })
 
 const currentPages = (components: ScannedComponent[]): Page[] =>
-  buildCurrentPages(components).map(c => ({
-    ...newPage(c.name),
-    blocks: c.blocks.map(item => ({ id: id(), width: 100, notes: '', ...item })),
-  }))
+  buildCurrentPages(components).map(c => {
+    const blocks: Block[] = c.blocks.map(item => ({ id: id(), width: 100, notes: '', ...item }))
+    // `original` is a snapshot of the page as imported, so the export can say what changed.
+    return { ...newPage(c.name), blocks, original: blocks, route: c.route, componentId: c.componentId }
+  })
 
 const emptyProject = (): Project => ({
   name: 'Untitled project',
@@ -37,8 +39,8 @@ interface State {
   setGlobalNotes: (notes: string) => void
   /** Replace the bank. Ids are `path#name`, so blocks stay linked across re-imports. */
   /**
-   * Load a scan. A different project (other folder/repo name) replaces everything: pages,
-   * notes, components, images, tokens. Re-importing the same project keeps the sketch.
+   * Load a scan as a fresh project: its pages (one tab per route), components, styles, images
+   * and brand. Whatever was open before is replaced; the import dialog confirms that first.
    */
   importScan: (scan: { components: ScannedComponent[]; styles: SourceFile[]; assets: Record<string, string>; tokens: BrandToken[] }, source: string) => void
 
@@ -47,8 +49,8 @@ interface State {
   deleteToken: (id: string) => void
   /** Toggle a role on a token; giving it takes the role from whichever token had it. */
   toggleTokenRole: (id: string, role: TokenRole) => void
-  /** Add the imported site's current pages as new tabs (never replaces existing ones). */
-  addCurrentPages: () => number
+  /** Replace everything with a project opened from a file. */
+  loadProject: (project: Project) => void
 
   addPage: () => void
   renamePage: (pageId: string, name: string) => void
@@ -119,29 +121,22 @@ export const useStore = create<State>()(
 
         setProjectName: name => set(s => ({ project: { ...s.project, name } })),
         setGlobalNotes: globalNotes => set(s => ({ project: { ...s.project, globalNotes } })),
-        importScan: ({ components, styles, assets, tokens }, source) =>
-          set(s => {
-            const same = s.project.source === source
-            const project: Project = same
-              ? { ...s.project, components, styles, assets, tokens: s.project.tokens.length ? s.project.tokens : tokens }
-              : { ...emptyProject(), name: source, source, components, styles, assets, tokens }
-            const reset = { selectedBlockId: null, editingBlockId: null, selectedElementPath: null }
-            // Start from the site as it is today, unless that would overwrite an existing sketch.
-            const pages = currentPages(components)
-            if (same && s.project.pages.some(p => p.blocks.length)) return { project }
-            if (!pages.length) return { project, activePageId: project.pages[0].id, ...reset }
-            return { project: { ...project, pages }, activePageId: pages[0].id, ...reset }
-          }),
-        addCurrentPages: () => {
-          const pages = currentPages(get().project.components)
-          if (pages.length)
-            set(s => ({
-              project: { ...s.project, pages: [...s.project.pages, ...pages] },
-              activePageId: pages[0].id,
-              selectedBlockId: null,
-            }))
-          return pages.length
+        importScan: ({ components, styles, assets, tokens }, source) => {
+          const pages = currentPages(components)
+          const project: Project = {
+            ...emptyProject(),
+            name: source,
+            source,
+            components,
+            styles,
+            assets,
+            tokens,
+            ...(pages.length && { pages }),
+          }
+          set({ project, activePageId: project.pages[0].id, selectedBlockId: null, editingBlockId: null, selectedElementPath: null })
         },
+        loadProject: project =>
+          set({ project, activePageId: project.pages[0].id, selectedBlockId: null, editingBlockId: null, selectedElementPath: null }),
 
         addPage: () => {
           const page = newPage(`Page ${get().project.pages.length + 1}`)
@@ -234,19 +229,12 @@ export const useStore = create<State>()(
     },
     {
       name: 'sketchkit',
-      version: 3,
+      version: PROJECT_VERSION,
       storage: createJSONStorage(() => idbStorage),
       partialize: s => ({ project: s.project, activePageId: s.activePageId }),
       migrate: (persisted, version) => {
         const state = persisted as { project: Project }
-        if (version < 2) {
-          // v1: width was 'full' | 'half' | 'third'; no saved styles.
-          const pct: Record<string, number> = { full: 100, half: 50, third: 100 / 3 }
-          state.project.styles ??= []
-          for (const page of state.project.pages)
-            for (const b of page.blocks) b.width = pct[b.width as unknown as string] ?? 100
-        }
-        if (version < 3) state.project.assets ??= {} // v2 had no images
+        state.project = migrateProject(state.project, version)
         return state as unknown as State
       },
     },

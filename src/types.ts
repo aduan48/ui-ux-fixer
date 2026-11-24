@@ -67,6 +67,10 @@ export interface Page {
   name: string
   notes: string
   blocks: Block[]
+  /** For pages rebuilt from the imported site: its route, the component that renders it, and its blocks as imported. */
+  route?: string
+  componentId?: string
+  original?: Block[]
 }
 
 export type TokenKind = 'color' | 'font' | 'fontSize' | 'radius' | 'spacing'

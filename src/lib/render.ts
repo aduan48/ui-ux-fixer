@@ -16,13 +16,26 @@ const children = (n: StaticNode) => ('children' in n ? n.children : [])
 export function textOf(n: StaticNode): string {
   if (n.t === 'text') return n.v
   if (n.t === 'expr') return `{${n.v}}`
-  return children(n).map(textOf).join('')
+  // Separate the text of neighbouring elements ("EST. 2022" + "Colby Club Hockey"), then tidy spaces.
+  return children(n).map(textOf).join(' ').replace(/\s+/g, ' ')
 }
+
+/** Components directly or deeply inside a node, by name: what a wrapper "contains". */
+const compsIn = (n: StaticNode): string[] =>
+  children(n).flatMap(c => (c.t === 'comp' ? [c.name] : compsIn(c)))
+
+/** Tailwind-style utilities (mx-auto, mt-4, md:flex) say nothing about what an element is. */
+const UTILITY = /:|^-?(m|p)[xytrblse]?-|^(text|font|bg|border|rounded|w|h|min|max|size|gap|space|flex|grid|items|justify|self|place|content|col|row|shadow|ring|opacity|z|top|left|right|bottom|inset|tracking|leading|overflow|object|aspect|transition|duration|ease|animate|cursor|order|basis|grow|shrink|from|via|to|fill|stroke|outline|divide|decoration|underline|whitespace|break|line-clamp|backdrop|blur|scale|rotate|translate)-|^(flex|grid|block|inline|inline-block|inline-flex|hidden|relative|absolute|fixed|sticky|static|container|truncate|uppercase|lowercase|capitalize|italic|underline|grow|shrink|border|rounded|shadow|antialiased|sr-only)$/
 
 const describe = (n: StaticNode, tag: string) => {
   const attrs = n.t === 'el' || n.t === 'comp' ? n.attrs : undefined
+  // div#about-section / section.white-section: an id or a meaningful class says more than a bare tag.
+  const cls = n.t === 'el' ? n.cls?.split(/\s+/).find(c => c && !UTILITY.test(c)) : undefined
+  const name = n.t === 'el' && attrs?.id ? `${tag}#${attrs.id}` : cls ? `${tag}.${cls}` : tag
   const text = (textOf(n).replace(/\s+/g, ' ').trim() || attrs?.alt || attrs?.placeholder || attrs?.['aria-label'] || '').slice(0, 32)
-  return text ? `${tag} “${text}”` : tag
+  if (text) return `${name} “${text}”`
+  const inside = [...new Set(compsIn(n))]
+  return inside.length ? `${name} with ${inside.slice(0, 3).map(c => `<${c}>`).join(', ')}` : name
 }
 
 /** The headings, text, buttons, images… inside a component (not its root), in document order. */

@@ -4,6 +4,9 @@ import { indexComponents, type ComponentIndex } from './render'
 export interface CurrentPage {
   name: string
   blocks: BankItem[]
+  route?: string
+  /** The component that renders this page (route file or Route element). */
+  componentId?: string
 }
 
 const ROUTER_SWITCH = new Set(['Routes', 'Switch'])
@@ -93,7 +96,7 @@ export function buildCurrentPages(components: ScannedComponent[]): CurrentPage[]
       if (seen.has(key) || route.path.includes('*') || route.path.includes(':')) continue // aliases, 404s, dynamic routes
       seen.add(key)
       const content = (frames: Frame[]): BankItem[] => (target ? toBlocks(target, index, frames) : [])
-      pages.push({ name: routeTitle(route.path), blocks: toBlocks(shell, index, [], content) })
+      pages.push({ name: routeTitle(route.path), route: route.path, componentId: target?.id, blocks: toBlocks(shell, index, [], content) })
     }
     if (pages.length) return pages.sort(homeFirst)
   }
@@ -107,6 +110,8 @@ export function buildCurrentPages(components: ScannedComponent[]): CurrentPage[]
     return react
       .map(page => ({
         name: routeTitle(page.name),
+        ...(page.name.startsWith('/') && { route: page.name }),
+        componentId: page.id,
         blocks: layout ? toBlocks(layout, index, [], frames => toBlocks(page, index, frames)) : toBlocks(page, index, []),
       }))
       .sort(homeFirst)
@@ -116,6 +121,7 @@ export function buildCurrentPages(components: ScannedComponent[]): CurrentPage[]
   const htmlFiles = [...new Set(components.filter(c => c.framework === 'html').map(c => c.filePath))]
   return htmlFiles.map(file => ({
     name: /(^|\/)index\.html?$/.test(file) ? 'Home' : file.replace(/\.html?$/, ''),
+    route: '/' + file.replace(/(^|\/)index\.html?$/, '').replace(/\.html?$/, ''),
     blocks: components.filter(c => c.filePath === file).map(c => ({ kind: 'component', componentId: c.id })),
   }))
 }

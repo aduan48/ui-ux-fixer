@@ -3,11 +3,10 @@ import {
   type CollisionDetection, type DragEndEvent, type DragStartEvent,
 } from '@dnd-kit/core'
 import { sortableKeyboardCoordinates } from '@dnd-kit/sortable'
-import { Upload } from 'lucide-react'
 import { useEffect, useState } from 'react'
 import { Canvas, CANVAS_DROP_ID } from './components/Canvas'
 import { ComponentBank } from './components/ComponentBank'
-import { ImportDialog } from './components/ImportDialog'
+import { HeaderActions } from './components/HeaderActions'
 import { RightPanel } from './components/RightPanel'
 import { placeholderMeta } from './lib/catalog'
 import { labelAt } from './lib/render'
@@ -77,14 +76,8 @@ export default function App() {
           aria-label="Project name"
           className="w-64 rounded px-1.5 py-0.5 text-sm text-neutral-600 hover:bg-neutral-100 focus:bg-white focus:outline-2 focus:outline-blue-500"
         />
-        <button
-          onClick={() => setImporting(true)}
-          className="ml-auto flex items-center gap-1.5 rounded-md border border-neutral-200 px-2.5 py-1 text-[13px] font-medium text-neutral-700 hover:bg-neutral-50"
-        >
-          <Upload className="size-3.5" /> Import
-        </button>
+        <HeaderActions importing={importing} setImporting={setImporting} />
       </header>
-      {importing && <ImportDialog onClose={() => setImporting(false)} />}
 
       <DndContext sensors={sensors} collisionDetection={collision} onDragStart={onDragStart} onDragEnd={onDragEnd} onDragCancel={() => setDragging(null)}>
         <div className="flex min-h-0 flex-1">

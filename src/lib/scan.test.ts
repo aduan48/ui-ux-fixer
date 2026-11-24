@@ -94,7 +94,7 @@ describe('static trees, rendering and current pages', () => {
     expect(elementsOf(byName('Hero').tree).map(e => `${e.path} ${e.label}`)).toEqual([
       '0 h1 “{title}”',
       '1 p “{subtitle}”',
-      '2 button “{ctaLabel}”',
+      '2 button.btn-primary “{ctaLabel}”',
       '3 img',
     ])
   })
