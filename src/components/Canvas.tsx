@@ -150,14 +150,18 @@ export function Canvas() {
     if (Object.keys(patches).length) useStore.getState().placeBlocks(patches)
   }
 
-  // Shortcuts act on the selection; not while typing or editing inside a block.
+  // Shortcuts act on the selection; not while typing, and only undo/redo while editing inside a block.
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       const s = useStore.getState()
-      if ((e.target instanceof Element && e.target.closest('input, textarea, select, [contenteditable]')) || s.editingBlockId) return
+      // Text fields keep their own undo and shortcuts.
+      if (e.target instanceof Element && e.target.closest('input, textarea, select, [contenteditable]')) return
       const ids = s.selectedIds
       const mod = e.metaKey || e.ctrlKey
       const act = (fn: () => void) => { e.preventDefault(); fn() }
+      if (mod && e.key.toLowerCase() === 'z') return act(e.shiftKey ? s.redo : s.undo)
+      if (mod && e.key === 'y') return act(s.redo)
+      if (s.editingBlockId) return
       if (e.key === 'Escape') act(() => s.select([]))
       else if (mod && e.key === 'a') act(() => s.select(s.project.pages.find(p => p.id === s.activePageId)!.blocks.map(b => b.id)))
       else if (!ids.length) return

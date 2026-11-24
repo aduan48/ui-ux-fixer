@@ -23,7 +23,7 @@ export function Preview({ blockId, html, width, editable }: { blockId: string; h
   useEffect(() => {
     const onMessage = (e: MessageEvent) => {
       if (e.source !== frameRef.current?.contentWindow || typeof e.data !== 'object' || !e.data) return
-      const { skHeight, skSelect, skMove, skMoveInto, skOffset, skDelete, skDone } = e.data
+      const { skHeight, skSelect, skMove, skMoveInto, skOffset, skDelete, skDone, skUndo } = e.data
       const store = useStore.getState()
       if (typeof skHeight === 'number') store.setMeasured(blockId, Math.min(MAX_HEIGHT, Math.max(24, skHeight)))
       if (typeof skSelect === 'string') store.selectElement(skSelect)
@@ -42,6 +42,8 @@ export function Preview({ blockId, html, width, editable }: { blockId: string; h
         store.selectElement(null)
       }
       if (skDone) store.stopEditing()
+      if (skUndo === 'undo') store.undo()
+      if (skUndo === 'redo') store.redo()
     }
     addEventListener('message', onMessage)
     return () => removeEventListener('message', onMessage)

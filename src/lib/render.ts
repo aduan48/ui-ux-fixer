@@ -456,6 +456,10 @@ const EDITOR_SCRIPT = `(() => {
   addEventListener('keydown', e => {
     if ((e.key === 'Delete' || e.key === 'Backspace') && selected) post({ skDelete: selected.dataset.sk })
     if (e.key === 'Escape') post({ skDone: true })
+    if ((e.metaKey || e.ctrlKey) && (e.key.toLowerCase() === 'z' || e.key === 'y')) {
+      e.preventDefault()
+      post({ skUndo: e.shiftKey || e.key === 'y' ? 'redo' : 'undo' })
+    }
   })
   addEventListener('click', e => e.preventDefault(), true)
   addEventListener('submit', e => e.preventDefault(), true)

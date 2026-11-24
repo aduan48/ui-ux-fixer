@@ -3,6 +3,7 @@ import { create } from 'zustand'
 import { buildCurrentPages } from './lib/currentPages'
 import { contentBottom, fitToFrame, flowPositions, FRAMES, frameWidthOf, heightFrom, restack, type Restack } from './lib/layout'
 import { migrateProject, PROJECT_VERSION } from './lib/projectFile'
+import { createHistory } from './lib/history'
 import { PLACEHOLDER_WIDTHS } from './lib/placeholders'
 import { createJSONStorage, persist, type StateStorage } from 'zustand/middleware'
 import { blockNode } from './lib/render'
@@ -85,7 +86,15 @@ interface State {
   /** Apply an edit to a block's own copy of its markup (made from the scanned tree on first edit). */
   editBlockTree: (blockId: string, fn: (tree: StaticNode) => StaticNode) => void
   resetBlockTree: (blockId: string) => void
+
+  /** Step back or forward through page edits (blocks, pages, notes). Imports and opened files start a new history. */
+  undo: () => void
+  redo: () => void
 }
+
+// Snapshots of `project.pages`, recorded by the subscription below the store. Not persisted.
+const history = createHistory<Page[]>()
+let restoring = false
 
 /**
  * Projects can carry a few MB of CSS, past localStorage's limit, so they live in IndexedDB.
@@ -132,6 +141,17 @@ export const useStore = create<State>()(
           const fw = frameWidthOf(p)
           return fn(p.flow ? { ...p, flow: false, blocks: flowPositions(p.blocks, fw, heightOf), original: p.original && flowPositions(p.original, fw, heightOf) } : p)
         })
+      }
+
+      const restore = (pages: Page[] | undefined) => {
+        if (!pages) return
+        restoring = true
+        set(s => {
+          const activePageId = pages.some(p => p.id === s.activePageId) ? s.activePageId : pages[0].id
+          const ids = new Set(pages.find(p => p.id === activePageId)!.blocks.map(b => b.id))
+          return { project: { ...s.project, pages }, activePageId, selectedIds: s.selectedIds.filter(i => ids.has(i)), editingBlockId: s.editingBlockId && ids.has(s.editingBlockId) ? s.editingBlockId : null, selectedElementPath: null }
+        })
+        restoring = false
       }
 
       const initial = emptyProject()
@@ -263,6 +283,8 @@ export const useStore = create<State>()(
           const original = blockNode({ ...block, tree: undefined }, project.components)
           get().updateBlock(blockId, { tree: JSON.stringify(next) === JSON.stringify(original) ? undefined : next })
         },
+        undo: () => restore(history.undo(get().project.pages)),
+        redo: () => restore(history.redo(get().project.pages)),
         resetBlockTree: blockId => {
           get().updateBlock(blockId, { tree: undefined })
           set({ selectedElementPath: null })
@@ -282,6 +304,14 @@ export const useStore = create<State>()(
     },
   ),
 )
+
+useStore.subscribe((s, prev) => {
+  if (restoring || s.project.pages === prev.project.pages) return
+  // Only imports, opened files and the saved project loading replace the components: that's a new history.
+  if (s.project.components !== prev.project.components) return history.clear()
+  // Keystrokes in the notes fields merge into one step; every other change is its own step.
+  history.record(prev.project.pages, !!document.activeElement?.matches('input, textarea'))
+})
 
 export const useActivePage = () =>
   useStore(s => s.project.pages.find(p => p.id === s.activePageId) ?? s.project.pages[0])
