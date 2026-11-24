@@ -1,12 +1,12 @@
 import { useDroppable } from '@dnd-kit/core'
-import { Maximize, Minus, Plus } from 'lucide-react'
+import { ExternalLink, Maximize, Minus, Plus } from 'lucide-react'
 import { useEffect, useLayoutEffect, useRef, useState } from 'react'
 import Moveable, { type OnDragEnd, type OnResizeEnd } from 'react-moveable'
 import Selecto from 'react-selecto'
 import { contentBottom, FRAMES, frameWidthOf, heightFrom, placedBlocks } from '../lib/layout'
 import { VIEWPORT_HEIGHT } from '../lib/render'
 import { useActivePage, useStore } from '../store'
-import type { Block } from '../types'
+import type { Block, Page } from '../types'
 import { BlockCard } from './BlockCard'
 import { PageTabs } from './PageTabs'
 
@@ -26,6 +26,23 @@ const resizeStyle = (e: { target: HTMLElement | SVGElement; width: number; heigh
 /** "Home" → "/", "about" → "/about": shown in the browser frame's address bar. */
 const pageUrl = (name: string) => (/^home$/i.test(name) ? '/' : '/' + name.toLowerCase().replace(/^\//, '').replace(/\s+/g, '-'))
 
+/**
+ * The page's address on the real site: the live URL plus its route (pages rebuilt from the import keep one;
+ * the extra Navbar & Footer tab shows the home page). Undefined when there's none to show.
+ */
+function liveSrc(base: string | undefined, page: Page): string | undefined {
+  let url: URL
+  try {
+    url = new URL(base ?? '')
+  } catch {
+    return
+  }
+  // Never SketchKit's own origin: with scripts and same-origin, the frame could reach into the app.
+  if (!/^https?:$/.test(url.protocol) || url.origin === location.origin) return
+  const route = page.route ?? (page.original ? '/' : undefined)
+  return route === undefined ? undefined : url.href.replace(/\/$/, '') + route
+}
+
 /** The page frame's content box, for turning screen points into page px. */
 let frameEl: HTMLDivElement | null = null
 
@@ -41,7 +58,13 @@ export function Canvas() {
   const page = useActivePage()
   const source = useStore(s => s.project.source ?? s.project.name)
   const measured = useStore(s => s.measured)
-  const { setNodeRef, isOver } = useDroppable({ id: CANVAS_DROP_ID })
+  const liveUrl = useStore(s => s.project.liveUrl)
+  // Live: the real site at this page's route (its own JS, WebGL, data), to look at. Sketch: the editable blocks.
+  const [live, setLive] = useState(false)
+  const liveRef = useRef(live)
+  liveRef.current = live
+  const src = live ? liveSrc(liveUrl, page) : undefined
+  const { setNodeRef, isOver } = useDroppable({ id: CANVAS_DROP_ID, disabled: live })
   const selectedIds = useStore(s => s.selectedIds)
   const editingId = useStore(s => s.editingBlockId)
 
@@ -155,7 +178,7 @@ export function Canvas() {
     const onKey = (e: KeyboardEvent) => {
       const s = useStore.getState()
       // Text fields keep their own undo and shortcuts.
-      if (e.target instanceof Element && e.target.closest('input, textarea, select, [contenteditable]')) return
+      if (liveRef.current || (e.target instanceof Element && e.target.closest('input, textarea, select, [contenteditable]'))) return
       const ids = s.selectedIds
       const mod = e.metaKey || e.ctrlKey
       const act = (fn: () => void) => { e.preventDefault(); fn() }
@@ -203,11 +226,29 @@ export function Canvas() {
                 <span className="size-2.5 rounded-full bg-neutral-300" />
               </div>
               <div className="mx-auto w-full max-w-sm truncate rounded-md bg-white px-3 py-1 text-center text-xs text-neutral-500 ring-1 ring-neutral-200">
-                {source.toLowerCase().replace(/\s+/g, '-')}{pageUrl(page.name)}
+                {src ?? `${source.toLowerCase().replace(/\s+/g, '-')}${pageUrl(page.name)}`}
               </div>
-              <span className="w-[42px]" aria-hidden />
+              {src ? (
+                // Some sites refuse to be embedded (X-Frame-Options): this still gets you there.
+                <a href={src} target="_blank" rel="noreferrer" title="Open in a new tab" className="flex w-[42px] justify-end text-neutral-500 hover:text-neutral-900">
+                  <ExternalLink className="size-3.5" />
+                </a>
+              ) : (
+                <span className="w-[42px]" aria-hidden />
+              )}
             </div>
 
+            {live ? (
+              src ? (
+                <iframe key={src} src={src} title="Live site" sandbox="allow-scripts allow-same-origin allow-forms allow-popups" className="block w-full rounded-b-xl border-0" style={{ height: VIEWPORT_HEIGHT }} />
+              ) : (
+                <div className="grid place-items-center p-16 text-center text-2xl text-neutral-500" style={{ height: VIEWPORT_HEIGHT }}>
+                  {!liveUrl ? 'Enter your site’s address in the toolbar below (your dev server, e.g. http://localhost:3000, or its live URL) to see this page live. If it stays blank, the site refuses to be embedded: open it with ↗.'
+                    : !liveSrc(liveUrl, { ...page, route: '/' }) ? 'Use an http(s) address of your site, not SketchKit’s own.'
+                    : 'This page isn’t on the site yet.'}
+                </div>
+              )
+            ) : (
             <div ref={el => { frameEl = el }} className="relative rounded-b-xl" style={{ height: frameHeight }}>
               {blocks.map((b, i) => <BlockCard key={b.id} block={page.blocks[i]} placed={b} />)}
               {page.blocks.length === 0 && (
@@ -219,10 +260,11 @@ export function Canvas() {
                 </div>
               )}
             </div>
+            )}
           </div>
         </div>
 
-        {viewport && (
+        {viewport && !live && (
           <>
             <Selecto
               container={viewport}
@@ -277,19 +319,49 @@ export function Canvas() {
           </>
         )}
 
-        <CanvasToolbar zoom={view.zoom} frameWidth={fw} onZoom={z => zoomTo(z)} onFit={fit} />
+        <CanvasToolbar
+          zoom={view.zoom}
+          frameWidth={fw}
+          onZoom={z => zoomTo(z)}
+          onFit={fit}
+          live={live}
+          onLive={on => {
+            if (on) useStore.getState().select([]) // nothing to act on while looking at the real site
+            setLive(on)
+          }}
+        />
       </div>
     </main>
   )
 }
 
-function CanvasToolbar({ zoom, frameWidth, onZoom, onFit }: { zoom: number; frameWidth: number; onZoom: (z: number) => void; onFit: () => void }) {
+function CanvasToolbar({ zoom, frameWidth, onZoom, onFit, live, onLive }: {
+  zoom: number; frameWidth: number; onZoom: (z: number) => void; onFit: () => void; live: boolean; onLive: (on: boolean) => void
+}) {
   const btn = 'rounded p-1 text-neutral-600 hover:bg-neutral-100'
+  const liveUrl = useStore(s => s.project.liveUrl)
+  const seg = (on: boolean) => `rounded px-1.5 py-0.5 ${on ? 'bg-white text-neutral-900 shadow-sm' : 'text-neutral-500 hover:text-neutral-800'}`
   return (
     <div
       onClick={e => e.stopPropagation()}
       className="absolute right-3 bottom-3 flex items-center gap-1 rounded-md border border-neutral-200 bg-white p-0.5 text-[11px] font-medium shadow-sm"
     >
+      <div role="radiogroup" aria-label="View" className="flex rounded bg-neutral-100 p-0.5">
+        <button role="radio" aria-checked={!live} onClick={() => onLive(false)} className={seg(!live)}>Sketch</button>
+        <button role="radio" aria-checked={live} onClick={() => onLive(true)} className={seg(live)}>Live</button>
+      </div>
+      {live && (
+        <input
+          key={liveUrl}
+          defaultValue={liveUrl}
+          placeholder="http://localhost:3000"
+          aria-label="Site address"
+          onBlur={e => useStore.getState().setLiveUrl(e.target.value)}
+          onKeyDown={e => e.key === 'Enter' && e.currentTarget.blur()}
+          className="w-48 rounded border border-neutral-200 px-1.5 py-0.5 text-[11px] font-normal text-neutral-800 focus:border-blue-500 focus:outline-none"
+        />
+      )}
+      <span className="mx-0.5 h-4 w-px bg-neutral-200" />
       <div role="radiogroup" aria-label="Page frame" className="flex rounded bg-neutral-100 p-0.5">
         {FRAMES.map(f => (
           <button

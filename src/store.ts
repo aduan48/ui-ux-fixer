@@ -45,6 +45,7 @@ interface State {
 
   setProjectName: (name: string) => void
   setGlobalNotes: (notes: string) => void
+  setLiveUrl: (url: string) => void
   /** Replace the bank. Ids are `path#name`, so blocks stay linked across re-imports. */
   /**
    * Load a scan as a fresh project: its pages (one tab per route), components, styles, images
@@ -168,6 +169,7 @@ export const useStore = create<State>()(
 
         setProjectName: name => set(s => ({ project: { ...s.project, name } })),
         setGlobalNotes: globalNotes => set(s => ({ project: { ...s.project, globalNotes } })),
+        setLiveUrl: liveUrl => set(s => ({ project: { ...s.project, liveUrl: liveUrl.trim() || undefined } })),
         importScan: ({ components, styles, assets, tokens }, source) => {
           const pages = currentPages(components)
           const project: Project = {
@@ -178,6 +180,7 @@ export const useStore = create<State>()(
             styles,
             assets,
             tokens,
+            liveUrl: get().project.liveUrl, // the same site, re-imported: keep where it runs
             ...(pages.length && { pages }),
           }
           set({ project, activePageId: project.pages[0].id, selectedIds: [], editingBlockId: null, selectedElementPath: null })

@@ -111,6 +111,8 @@ export interface Project {
   tokens: BrandToken[]
   pages: Page[]
   globalNotes: string
+  /** Where the real site runs (a dev server or deployed URL), shown in the canvas's Live view. */
+  liveUrl?: string
 }
 
 /** What the bank hands to the canvas when something is dragged out of it. */
