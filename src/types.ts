@@ -11,7 +11,8 @@ export type PlaceholderType = 'text' | 'image' | 'button' | 'spacer' | 'columns'
  */
 export type StaticNode =
   | { t: 'el'; tag: string; cls?: string; attrs?: Record<string, string>; children: StaticNode[] }
-  | { t: 'comp'; name: string; attrs?: Record<string, string>; children: StaticNode[] } // resolved by name at render time
+  // Another component. Resolved at render time by import (src + imp) when known, else by name.
+  | { t: 'comp'; name: string; src?: string; imp?: string; attrs?: Record<string, string>; children: StaticNode[] }
   | { t: 'frag'; children: StaticNode[] }
   | { t: 'text'; v: string }
   | { t: 'expr'; v: string }
@@ -25,6 +26,8 @@ export interface ScannedComponent {
   framework: 'react' | 'html'
   description?: string
   tree?: StaticNode
+  /** The file's default export (so `import Anything from './File'` finds it). */
+  isDefault?: boolean
 }
 
 /** A source file as read from a folder or GitHub. Paths are relative to the project root. */
@@ -75,7 +78,10 @@ export interface BrandToken {
   value: string
   name?: string
   count: number
-  role?: TokenRole
+  /** A token can fill several roles (one font for headings and body); each role belongs to one token. */
+  roles?: TokenRole[]
+  /** Where it was found: a file path, "classes" (Tailwind classes in markup), or "added" by the user. */
+  source?: string
 }
 
 export interface Project {

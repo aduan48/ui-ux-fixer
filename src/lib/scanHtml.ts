@@ -40,7 +40,8 @@ function label(el: Element) {
  * Top-level semantic elements become components. `main` is a container: its semantic
  * children and its classed divs are components. Unclassed wrapper divs are looked through.
  */
-export function scanHtmlFile(file: SourceFile, resolve: Resolve = () => undefined): ScannedComponent[] {
+export function scanHtmlFile(file: SourceFile, scan: { resolveAsset: Resolve } = { resolveAsset: () => undefined }): ScannedComponent[] {
+  const resolve = scan.resolveAsset
   const doc = new DOMParser().parseFromString(file.content, 'text/html')
   const found: Element[] = []
   const visit = (parent: Element, inMain: boolean) => {

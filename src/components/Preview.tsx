@@ -1,13 +1,12 @@
 import tailwindBrowser from '@tailwindcss/browser?url'
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { previewDoc } from '../lib/render'
-import { moveNode, removeNode } from '../lib/treeEdit'
+import { previewDoc, VIEWPORT_HEIGHT } from '../lib/render'
+import { backdropColor } from '../lib/color'
+import { moveInto, moveNode, removeNode } from '../lib/treeEdit'
 import { useStore } from '../store'
 
 /** Desktop width the page is rendered at; each block gets its share, then is scaled to fit. */
 export const PAGE_WIDTH = 1280
-/** Starting viewport height, so `h-screen` sections measure like a laptop screen, not 0px. */
-const VIEWPORT_HEIGHT = 800
 const MAX_HEIGHT = 4000
 const tailwindUrl = new URL(tailwindBrowser, location.href).href
 
@@ -16,8 +15,9 @@ const heights = new Map<string, number>()
 
 export function Preview({ blockId, html, blockWidth, editable }: { blockId: string; html: string; blockWidth: number; editable: boolean }) {
   const styles = useStore(s => s.project.styles)
+  const backdrop = useStore(s => backdropColor(s.project.tokens))
   const selected = useStore(s => (editable ? s.selectedElementPath : null))
-  const doc = useMemo(() => previewDoc(html, styles, tailwindUrl, { editable }), [html, styles, editable])
+  const doc = useMemo(() => previewDoc(html, styles, tailwindUrl, { editable, backdrop }), [html, styles, editable, backdrop])
 
   const frameRef = useRef<HTMLIFrameElement>(null)
   const boxRef = useRef<HTMLDivElement>(null)
@@ -27,7 +27,7 @@ export function Preview({ blockId, html, blockWidth, editable }: { blockId: stri
   useEffect(() => {
     const onMessage = (e: MessageEvent) => {
       if (e.source !== frameRef.current?.contentWindow || typeof e.data !== 'object' || !e.data) return
-      const { skHeight, skSelect, skMove, skDelete, skDone } = e.data
+      const { skHeight, skSelect, skMove, skMoveInto, skDelete, skDone } = e.data
       const store = useStore.getState()
       if (typeof skHeight === 'number') {
         const h = Math.min(MAX_HEIGHT, Math.max(24, skHeight))
@@ -37,6 +37,10 @@ export function Preview({ blockId, html, blockWidth, editable }: { blockId: stri
       if (typeof skSelect === 'string') store.selectElement(skSelect)
       if (skMove && typeof skMove.from === 'string' && typeof skMove.target === 'string') {
         store.editBlockTree(blockId, t => moveNode(t, skMove.from, skMove.target, !!skMove.after))
+        store.selectElement(null)
+      }
+      if (skMoveInto && typeof skMoveInto.from === 'string' && typeof skMoveInto.parent === 'string') {
+        store.editBlockTree(blockId, t => moveInto(t, skMoveInto.from, skMoveInto.parent))
         store.selectElement(null)
       }
       if (typeof skDelete === 'string') {

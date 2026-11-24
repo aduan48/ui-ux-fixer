@@ -6,7 +6,7 @@ import { isImage, isWanted } from './files'
 import { guessType, splitWords } from './guessType'
 import { buildCurrentPages } from './currentPages'
 import { elementsOf, renderBlock, renderHtml } from './render'
-import { moveNode, nudgeNode, removeNode } from './treeEdit'
+import { moveInto, moveNode, nudgeNode, removeNode } from './treeEdit'
 import type { Block, StaticNode } from '../types'
 import { scanProject } from './scan'
 
@@ -101,7 +101,7 @@ describe('static trees, rendering and current pages', () => {
 
   it('renders nested components with the string props the parent passes', () => {
     const html = renderHtml(byName('/').tree!, components)
-    expect(html).toContain('<h1 class="text-5xl font-bold tracking-tight">Ship faster</h1><p class="mt-4 text-lg text-gray-600">The toolkit for small teams</p><button class="btn-primary mt-8">Start free</button>')
+    expect(html).toContain('<h1 class="font-display text-5xl font-bold tracking-tight">Ship faster</h1><p class="mt-4 text-lg text-gray-600">The toolkit for small teams</p><button class="btn-primary mt-8">Start free</button>')
     expect(html).toContain('<h2 class="text-2xl font-bold">What people say</h2><ul><li><span class="sk-expr">q.text</span></li></ul>')
   })
 
@@ -123,7 +123,7 @@ describe('static trees, rendering and current pages', () => {
     }))
     expect(pages).toEqual([
       { name: 'Home', blocks: [NAV, 'Hero {"title":"Ship faster","subtitle":"The toolkit for small teams","ctaLabel":"Start free"}', 'PricingSection', '/@2', FOOT] },
-      { name: 'about', blocks: [NAV, 'Navbar', '/about@1', FOOT] },
+      { name: 'About', blocks: [NAV, 'Navbar', '/about@1', FOOT] },
       { name: 'PricingPage', blocks: [NAV, 'PricingSection', FOOT] },
     ])
   })
@@ -140,7 +140,7 @@ describe('detailed previews', () => {
 
   it('keeps the wrappers a section sat in on the page', () => {
     const html = renderBlock(block('Hero'), components, assets)!
-    expect(html.startsWith('<div class="bg-gray-50 text-gray-900"><main class="mx-auto max-w-5xl px-6"><section class="hero-bg py-24 text-center">')).toBe(true)
+    expect(html.startsWith('<div class="bg-gray-50 text-gray-900" data-sk-frame><main class="mx-auto max-w-5xl px-6" data-sk-frame><section class="hero-bg py-24 text-center">')).toBe(true)
   })
 
   it('shows imported, public and prop-passed images', () => {
@@ -155,7 +155,7 @@ describe('detailed previews', () => {
 
   it('tags the block\'s own elements for the in-preview editor, not nested internals', () => {
     const html = renderBlock(block('Hero'), components, assets)!
-    expect(html).toContain('<h1 class="text-5xl font-bold tracking-tight" data-sk="0">')
+    expect(html).toContain('<h1 class="font-display text-5xl font-bold tracking-tight" data-sk="0">')
     expect(html).not.toContain('data-sk=""')
   })
 
@@ -185,9 +185,73 @@ describe('tree edits', () => {
     expect(moveNode(hero, '2', '2.0', true)).toBe(hero)
   })
 
+  it('moves into a container, including from an earlier sibling and to the root', () => {
+    const withEmpty = t('section', t('h1'), t('div'), t('p'))
+    expect(tags(moveInto(withEmpty, '0', '1'))).toBe('section(div(h1),p)')
+    expect(tags(moveInto(withEmpty, '2', '1'))).toBe('section(h1,div(p))')
+    expect(tags(moveInto(hero, '2.0', ''))).toBe('section(h1,p,div(a),button)')
+    expect(moveInto(hero, '2', '2.0')).toBe(hero)
+  })
+
   it('nudges and removes', () => {
     expect(tags(nudgeNode(hero, '1', -1))).toBe('section(p,h1,div(button,a))')
     expect(nudgeNode(hero, '0', -1)).toBe(hero)
     expect(tags(removeNode(hero, '2.0'))).toBe('section(h1,p,div(a))')
+  })
+})
+
+describe('Create React App + React Router sites', () => {
+  const files = [
+    { path: 'src/App.js', content: `import Home from './pages/Home'
+import Schedule from './pages/Schedule'
+import Nav from './components/Navbar'
+import Footer from './components/Footer'
+import { BrowserRouter as Router, Route, Routes } from 'react-router-dom'
+function App() {
+  const [loading] = useState(true)
+  if (loading) return <div className="loading-screen"><div className="loader" /></div>
+  return (
+    <div className="App">
+      <Router>
+        <Nav />
+        <Routes>
+          <Route path="/" element={<Home />} />
+          <Route path="/about" element={<Home />} />
+          <Route path="/schedule" element={<Schedule />} />
+          <Route path="/team/:id" element={<Schedule />} />
+          <Route path="*" element={<NotFound />} />
+        </Routes>
+        <Footer />
+      </Router>
+    </div>
+  )
+}
+export default App` },
+    { path: 'src/pages/Home.js', content: `import Puck from '../components/Hero'
+export default function Home() { return <div className="home"><Puck /><div className="white-section"><p>About us</p></div></div> }` },
+    { path: 'src/pages/Schedule.js', content: `export default function Schedule() { return <section className="schedule">Games</section> }` },
+    { path: 'src/components/Hero.js', content: `function Hero() { return <div className="hero"><h1>Club Hockey</h1></div> }\nexport default Hero` },
+    { path: 'src/components/Navbar.js', content: `export default function Navbar() { return <nav>Menu</nav> }` },
+    { path: 'src/components/Footer.js', content: `export default function Footer() { return <footer>©</footer> }` },
+  ]
+  const { components } = scanProject(files)
+  const pages = buildCurrentPages(components)
+  const name = (id: string) => components.find(c => c.id === id)!.name
+
+  it('uses the main render, not an early loading return', () => {
+    const app = components.find(c => c.name === 'App')!
+    expect(app.tree).toMatchObject({ t: 'el', tag: 'div', cls: 'App' })
+  })
+
+  it('makes one page per route, inside the App shell, skipping aliases, 404s and dynamic routes', () => {
+    expect(pages.map(p => ({ name: p.name, blocks: p.blocks.map(b => (b.kind === 'element' ? `${name(b.componentId)}@${b.elementPath}` : b.kind === 'component' ? name(b.componentId) : '')) }))).toEqual([
+      { name: 'Home', blocks: ['Navbar', 'Hero', 'Home@1', 'Footer'] },
+      { name: 'Schedule', blocks: ['Navbar', 'Schedule', 'Footer'] },
+    ])
+  })
+
+  it('finds components imported under another name, inside the page wrappers', () => {
+    const hero = { id: 'x', width: 100, notes: '', ...pages[0].blocks[1] } as Block
+    expect(renderBlock(hero, components, {})).toBe('<div class="App" data-sk-frame><div class="home" data-sk-frame><div class="hero"><h1 data-sk="0">Club Hockey</h1></div></div></div>')
   })
 })

@@ -75,8 +75,29 @@ const attrName = (k: string) =>
 const PLACEHOLDER_IMG =
   'data:image/svg+xml,' + encodeURIComponent('<svg xmlns="http://www.w3.org/2000/svg" width="160" height="96"><rect width="100%" height="100%" fill="#e5e5e5"/><path d="M0 0L160 96M160 0L0 96" stroke="#d4d4d4"/></svg>')
 
+/** Finds the component a `comp` node refers to: by its import when known, else by name. */
+export interface ComponentIndex {
+  find: (n: { name: string; src?: string; imp?: string }) => ScannedComponent | undefined
+}
+
+export function indexComponents(components: ScannedComponent[]): ComponentIndex {
+  const byName = new Map<string, ScannedComponent>()
+  const byFile = new Map<string, ScannedComponent>()
+  // Prefer real components over route files when two share a name.
+  for (const c of [...components].sort((a, b) => Number(a.type === 'page') - Number(b.type === 'page'))) {
+    if (!byName.has(c.name)) byName.set(c.name, c)
+    byFile.set(`${c.filePath}#${c.isDefault ? 'default' : c.name}`, c)
+  }
+  return {
+    find: n => (n.src && byFile.get(`${n.src}#${n.imp === 'default' ? 'default' : n.imp ?? n.name}`)) || byName.get(n.name),
+  }
+}
+
+/** Library wrappers we render straight through (their children are the content). */
+const ROUTER_SWITCH = new Set(['Routes', 'Switch'])
+
 interface Ctx {
-  byName: Map<string, ScannedComponent>
+  index: ComponentIndex
   assets: Record<string, string>
   depth: number
   props?: Record<string, string> // string props passed by the parent: <Hero title="Hi">
@@ -95,7 +116,7 @@ function attrsOf(n: { cls?: string; attrs?: Record<string, string> }, tag: strin
     if (k === 'href' || k === 'xlinkHref') out += ` ${attrName(k)}="${v.startsWith('#') && tag === 'use' ? esc(v) : '#'}"` // previews never navigate
     else if (k === 'src' || k === 'poster') out += ` ${k}="${esc(imageUrl(v, ctx))}"`
     else if (k === 'srcSet') continue // may point at files we don't have; src is enough
-    else out += ` ${attrName(k)}="${esc(v)}"`
+    else out += ` ${attrName(k)}="${esc(k === 'style' ? fixVh(v) : v)}"`
   }
   if (tag === 'img' && !n.attrs?.src) out += ` src="${PLACEHOLDER_IMG}"`
   if (mark) out += ` data-sk="${mark}"`
@@ -122,12 +143,16 @@ function render(n: StaticNode, ctx: Ctx, path?: string): string {
     case 'frag':
       return n.children.map(child).join('')
     case 'comp': {
-      const target = ctx.byName.get(n.name)
-      const slot = () => n.children.map(child).join('')
+      const target = ctx.index.find(n)
       const mark = path ? path : ctx.mark
-      // depth cap guards against components that render themselves
-      if (!target?.tree || ctx.depth > 8) return `<div class="sk-missing"${mark ? ` data-sk="${mark}"` : ''}>&lt;${esc(n.name)}&gt;${slot()}</div>`
-      return render(target.tree, { ...ctx, depth: ctx.depth + 1, props: n.attrs, slot, mark })
+      // <Routes>: only the first route renders, like in the browser.
+      const kids = ROUTER_SWITCH.has(n.name) ? n.children.slice(0, 1) : n.children
+      const slot = () => kids.map(child).join('')
+      if (target?.tree && ctx.depth <= 8) // depth cap guards against components that render themselves
+        return render(target.tree, { ...ctx, depth: ctx.depth + 1, props: n.attrs, slot, mark })
+      // Not in the project (Router, ThemeProvider, MUI…): show its children, or a small labelled stub.
+      if (kids.length) return slot()
+      return `<span class="sk-missing"${mark ? ` data-sk="${mark}"` : ''}>${esc(n.name)}</span>`
     }
     case 'el': {
       if (DROPPED.has(n.tag)) return ''
@@ -144,9 +169,7 @@ function render(n: StaticNode, ctx: Ctx, path?: string): string {
 }
 
 function makeCtx(components: ScannedComponent[], assets: Record<string, string>, props?: Record<string, string>): Ctx {
-  const byName = new Map<string, ScannedComponent>()
-  for (const c of components) if (c.type !== 'page' && !byName.has(c.name)) byName.set(c.name, c)
-  return { byName, assets, depth: 0, props }
+  return { index: indexComponents(components), assets, depth: 0, props }
 }
 
 export function renderHtml(node: StaticNode, components: ScannedComponent[], props?: Record<string, string>, assets: Record<string, string> = {}): string {
@@ -180,9 +203,9 @@ export function renderBlock(block: Block, components: ScannedComponent[], assets
       const inner = html
       if (a.t === 'el' && !DROPPED.has(a.tag) && a.tag !== 'html') {
         const tag = a.tag === 'body' ? 'div' : a.tag
-        html = `<${tag}${attrsOf(a, tag, ctx)}>${inner}</${tag}>`
+        html = `<${tag}${attrsOf(a, tag, ctx)} data-sk-frame>${inner}</${tag}>`
       } else if (a.t === 'comp') {
-        const target = ctx.byName.get(a.name)
+        const target = ctx.index.find(a)
         if (target?.tree) html = render(target.tree, { ...ctx, depth: 1, props: a.attrs, slot: () => inner })
       }
     }
@@ -192,23 +215,119 @@ export function renderBlock(block: Block, components: ScannedComponent[], assets
 
 // ---------- Preview document ----------
 
+/** The viewport height previews pretend to have (a laptop screen). */
+export const VIEWPORT_HEIGHT = 800
+
+/**
+ * vh units → px. In an iframe sized to its content, \`vh\` is a percentage of the content's own
+ * height, so a 60vh carousel grows the frame, which grows the carousel… forever. Pinning vh to
+ * a fixed viewport breaks the loop and matches what a laptop would show.
+ */
+export const fixVh = (css: string) =>
+  // url(...) is matched first and kept as is, so inlined base64 images are never touched.
+  css.replace(/url\([^)]*\)|(-?\d*\.?\d+)(?:[sdl])?vh\b/g, (m, n?: string) =>
+    n === undefined ? m : `${+(Number(n) * VIEWPORT_HEIGHT / 100).toFixed(2)}px`)
+
+/** Tailwind's screen-height utilities are generated at runtime, so pin them with overrides. */
+const SCREEN_UTILITIES = ['h', 'min-h', 'max-h']
+  .flatMap(p => ['screen', 'svh', 'dvh', 'lvh'].map(u => `.${p}-${u}{${p === 'h' ? 'height' : p === 'min-h' ? 'min-height' : 'max-height'}:${VIEWPORT_HEIGHT}px!important}`))
+  .join('')
+
 const TAILWIND_SOURCE = /@tailwind\b|@apply\b|@theme\b|@import\s+["']tailwindcss/
 
 /**
- * Runs inside an editable preview: hover outlines, click to select, drag an element to move
- * it before/after another (a line shows where). Reports intents to the app with postMessage;
- * the app edits the tree and re-renders.
+ * Runs inside an editable preview: hover outlines, click to select, drag an element anywhere
+ * (before/after another element, or into a container). Reports intents to the app with
+ * postMessage; the app edits the tree and re-renders.
+ *
+ * Hit-testing is geometric, not elementFromPoint: sites stack overlays (video backgrounds,
+ * absolute wrappers, pointer-events:none layers) on top of their content, and we always want
+ * the most specific element under the pointer, whatever is painted above it.
  */
 const EDITOR_SCRIPT = `(() => {
   const post = m => parent.postMessage(m, '*')
-  const mk = c => { const d = document.createElement('div'); d.className = c; document.documentElement.append(d); return d }
-  const hover = mk('sk-hover'), sel = mk('sk-sel'), line = mk('sk-line')
+  // A custom tag, so the site's own \`div { … }\` rules can never style our overlays.
+  const mk = c => { const d = document.createElement('sk-box'); d.className = c; document.documentElement.append(d); return d }
+  const hover = mk('sk-hover'), sel = mk('sk-sel'), line = mk('sk-line'), into = mk('sk-into')
   const place = (b, el) => {
     if (!el) return (b.style.display = 'none')
     const r = el.getBoundingClientRect()
     Object.assign(b.style, { display: 'block', left: r.left + scrollX + 'px', top: r.top + scrollY + 'px', width: r.width + 'px', height: r.height + 'px' })
   }
-  const at = (x, y) => document.elementFromPoint(x, y)?.closest('[data-sk]')
+  const visible = () => [...document.querySelectorAll('[data-sk]')].filter(el => { const r = el.getBoundingClientRect(); return r.width > 1 && r.height > 1 })
+  const contains = (el, x, y) => { const r = el.getBoundingClientRect(); return x >= r.left && x <= r.right && y >= r.top && y <= r.bottom }
+  const depth = p => (p ? p.split('.').length : 0)
+  const MEDIA = /^(VIDEO|IMG|PICTURE|CANVAS|SOURCE|IFRAME|SVG)$/i
+  /** A box that only holds media (a background video layer): not a place to drop content. */
+  const isMediaBox = el => el.children.length > 0 && [...el.children].every(c => MEDIA.test(c.tagName))
+  /** The smallest editable element under (x, y), ignoring \`skip\` and everything inside it. */
+  const at = (x, y, skip, forDrop) => {
+    let best = null, area = Infinity
+    for (const el of visible()) {
+      if (skip && skip.contains(el)) continue
+      if (forDrop && (isMediaBox(el) || (MEDIA.test(el.tagName) && el.parentElement && isMediaBox(el.parentElement)))) continue
+      if (!contains(el, x, y)) continue
+      const r = el.getBoundingClientRect()
+      if (r.width * r.height < area) { best = el; area = r.width * r.height }
+    }
+    return best
+  }
+  /**
+   * Children of the container at \`path\` ("" = the block's root), as { path, el }. Worked out
+   * from paths, not the DOM: a component like <Link> renders no element of its own, but it's
+   * still a child (represented by its first rendered element).
+   */
+  const kidsOf = (path, skip) => {
+    const base = depth(path), map = new Map()
+    for (const el of visible()) {
+      if (skip && skip.contains(el)) continue
+      const p = el.dataset.sk
+      if (depth(p) <= base || (path !== '' && !p.startsWith(path + '.'))) continue
+      const child = p.split('.').slice(0, base + 1).join('.')
+      const cur = map.get(child)
+      if (!cur || depth(p) < depth(cur.dataset.sk)) map.set(child, el)
+    }
+    return [...map].map(([p, el]) => ({ path: p, el }))
+  }
+  const isRow = el => {
+    const s = el && getComputedStyle(el)
+    return !!s && ((s.display.includes('flex') && !s.flexDirection.startsWith('column')) || s.display.includes('grid'))
+  }
+  const isEmpty = el => !el.textContent.trim() && !el.querySelector('img,svg,video,input,button,textarea,select,iframe')
+  const CONTAINER = /^(DIV|SECTION|MAIN|ARTICLE|ASIDE|HEADER|FOOTER|NAV|UL|OL|LI|FORM|FIGURE|SPAN)$/
+
+  /**
+   * Where a drop at (x, y) lands: inside the container under the pointer, next to whichever of
+   * its children is closest (so dropping anywhere in a div works), or into it if it's empty.
+   */
+  const dropAt = (x, y, dragged) => {
+    const t = at(x, y, dragged, true)
+    let path = ''
+    if (t) {
+      if (kidsOf(t.dataset.sk, dragged).length) path = t.dataset.sk
+      else if (CONTAINER.test(t.tagName) && isEmpty(t)) return { into: t.dataset.sk, box: t }
+      else {
+        const r = t.getBoundingClientRect()
+        const row = isRow(t.parentElement) || getComputedStyle(t).display.startsWith('inline')
+        return { target: t.dataset.sk, after: row ? x > r.left + r.width / 2 : y > r.top + r.height / 2, el: t, row }
+      }
+    }
+    const all = kidsOf(path, dragged)
+    // Background layers (a full-size video box) sit at distance 0 from everything; prefer real content.
+    const content = all.filter(k => !isMediaBox(k.el) && !MEDIA.test(k.el.tagName))
+    const kids = content.length ? content : all
+    if (!kids.length) return path ? { into: path, box: t } : null
+    let best = null, dist = Infinity
+    for (const k of kids) {
+      const r = k.el.getBoundingClientRect()
+      const dx = Math.max(r.left - x, 0, x - r.right), dy = Math.max(r.top - y, 0, y - r.bottom)
+      if (dx * dx + dy * dy < dist) { dist = dx * dx + dy * dy; best = k }
+    }
+    const r = best.el.getBoundingClientRect()
+    const row = isRow(best.el.parentElement)
+    return { target: best.path, after: row ? x > r.left + r.width / 2 : y > r.top + r.height / 2, el: best.el, row }
+  }
+
   let selected = null
   new ResizeObserver(() => place(sel, selected)).observe(document.body)
   // The app tells us what's selected (e.g. picked in the layers panel).
@@ -217,31 +336,48 @@ const EDITOR_SCRIPT = `(() => {
     selected = e.data.skShow ? document.querySelector('[data-sk="' + CSS.escape(e.data.skShow) + '"]') : null
     place(sel, selected)
   })
+
   let drag = null
   addEventListener('pointermove', e => {
     if (!drag) return place(hover, at(e.clientX, e.clientY))
     if (!drag.moved && Math.hypot(e.clientX - drag.x, e.clientY - drag.y) < 4) return
+    if (!drag.moved) Object.assign(drag, lift(drag.el))
     drag.moved = true
     drag.el.style.opacity = '.35'
     place(hover, null)
-    const t = at(e.clientX, e.clientY)
-    drag.drop = null
+    drag.drop = dropAt(e.clientX, e.clientY, drag.el)
     line.style.display = 'none'
-    if (!t || t === drag.el || drag.el.contains(t) || t.contains(drag.el)) return
-    const r = t.getBoundingClientRect(), ps = getComputedStyle(t.parentElement)
-    const row = (ps.display.includes('flex') && !ps.flexDirection.startsWith('column')) || ps.display.includes('grid') || getComputedStyle(t).display.startsWith('inline')
-    const after = row ? e.clientX > r.left + r.width / 2 : e.clientY > r.top + r.height / 2
-    drag.drop = { target: t.dataset.sk, after }
-    Object.assign(line.style, row
-      ? { display: 'block', left: (after ? r.right : r.left) - 2 + scrollX + 'px', top: r.top + scrollY + 'px', width: '4px', height: r.height + 'px' }
-      : { display: 'block', left: r.left + scrollX + 'px', top: (after ? r.bottom : r.top) - 2 + scrollY + 'px', width: r.width + 'px', height: '4px' })
+    place(into, drag.drop && drag.drop.into !== undefined ? drag.drop.box || document.body : null)
+    const d = drag.drop
+    if (!d || d.into !== undefined) return
+    const r = d.el.getBoundingClientRect()
+    Object.assign(line.style, d.row
+      ? { display: 'block', left: (d.after ? r.right : r.left) - 2 + scrollX + 'px', top: r.top + scrollY + 'px', width: '4px', height: r.height + 'px' }
+      : { display: 'block', left: r.left + scrollX + 'px', top: (d.after ? r.bottom : r.top) - 2 + scrollY + 'px', width: r.width + 'px', height: '4px' })
   })
+  /**
+   * <a><button>Go</button></a>: the wrapper is what you mean to move, not the button inside it.
+   * Climbs (by path) while the parent has just this one child and no text of its own. Returns
+   * the path to move and the element to show while dragging.
+   */
+  const lift = el => {
+    let path = el.dataset.sk
+    while (depth(path) > 1) {
+      const parentPath = path.split('.').slice(0, -1).join('.')
+      if (kidsOf(parentPath).length !== 1) break
+      const parentEl = document.querySelector('[data-sk="' + CSS.escape(parentPath) + '"]')
+      if (parentEl && [...parentEl.childNodes].some(n => n.nodeType === 3 && n.textContent.trim())) break
+      path = parentPath
+      if (parentEl) el = parentEl
+    }
+    return { path, el }
+  }
   addEventListener('pointerdown', e => {
     const t = at(e.clientX, e.clientY)
     if (!t) return
     e.preventDefault()
     focus()
-    drag = { el: t, x: e.clientX, y: e.clientY, moved: false }
+    drag = { el: t, path: t.dataset.sk, x: e.clientX, y: e.clientY, moved: false }
   })
   addEventListener('pointerup', () => {
     if (!drag) return
@@ -249,7 +385,13 @@ const EDITOR_SCRIPT = `(() => {
     drag = null
     d.el.style.opacity = ''
     line.style.display = 'none'
-    if (d.moved) return d.drop && post({ skMove: { from: d.el.dataset.sk, ...d.drop } })
+    place(into, null)
+    if (d.moved) {
+      const from = d.path
+      if (d.drop && d.drop.into !== undefined) post({ skMoveInto: { from, parent: d.drop.into } })
+      else if (d.drop) post({ skMove: { from, target: d.drop.target, after: d.drop.after } })
+      return
+    }
     selected = d.el
     place(sel, selected)
     post({ skSelect: d.el.dataset.sk })
@@ -264,8 +406,47 @@ const EDITOR_SCRIPT = `(() => {
   addEventListener('dragstart', e => e.preventDefault()) // native image/link dragging would hijack the gesture
 })()`
 
+/**
+ * Runs in every preview: if nothing behind the content paints a background and its text is
+ * mostly light (white nav text that normally sits over a dark hero), put the site's dark
+ * colour behind it so it's readable — the way it looks on the real page.
+ */
+const BACKDROP_SCRIPT = `(() => {
+  const clear = s => s.backgroundImage === 'none' && (s.backgroundColor === 'transparent' || /,\\s*0\\)$|\\/\\s*0\\)$/.test(s.backgroundColor))
+  const lum = c => {
+    const n = (c.match(/[\\d.]+/g) || []).map(Number)
+    if (c.startsWith('rgb')) return (0.2126 * n[0] + 0.7152 * n[1] + 0.0722 * n[2]) / 255
+    if (c.startsWith('oklch') || c.startsWith('oklab') || c.startsWith('lab') || c.startsWith('lch')) return n[0] > 1 ? n[0] / 100 : n[0]
+    if (c.startsWith('color(')) return 0.2126 * n[0] + 0.7152 * n[1] + 0.0722 * n[2]
+    return 0
+  }
+  const check = () => {
+    if (document.body.dataset.skBackdrop) return
+    let painted = !clear(getComputedStyle(document.documentElement)) || !clear(getComputedStyle(document.body))
+    // Single wrappers (page frames) around the content count as "behind" it too.
+    for (let el = document.body.firstElementChild; !painted && el; el = el.children.length === 1 ? el.firstElementChild : null)
+      painted = !clear(getComputedStyle(el)) && el.getBoundingClientRect().height >= document.body.getBoundingClientRect().height * 0.9
+    if (painted) return
+    let light = 0, total = 0
+    const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT)
+    while (walker.nextNode()) {
+      const node = walker.currentNode, n = node.textContent.trim().length
+      if (!n || !node.parentElement || /^(SCRIPT|STYLE|NOSCRIPT|TEMPLATE)$/.test(node.parentElement.tagName)) continue
+      total += n
+      if (lum(getComputedStyle(node.parentElement).color) > 0.75) light += n
+    }
+    if (total && light / total > 0.5) {
+      document.body.dataset.skBackdrop = '1'
+      document.body.style.background = BACKDROP
+    }
+  }
+  addEventListener('load', () => { setTimeout(check, 60); setTimeout(check, 500) })
+})()`
+
 export interface PreviewOptions {
   editable?: boolean
+  /** Colour shown behind light content that has no background of its own (the site's dark tone). */
+  backdrop?: string
 }
 
 /**
@@ -281,26 +462,34 @@ export function previewDoc(bodyHtml: string, styles: SourceFile[], tailwindUrl: 
     .filter(s => TAILWIND_SOURCE.test(s.content))
     .map(s => s.content.replace(/^\s*@tailwind\b[^;]*;/gm, '').replace(/^\s*@import\s+["']tailwindcss[^;]*;/gm, ''))
     .join('\n')
-  const editor = opts.editable
-    ? `<script>${EDITOR_SCRIPT}</script>`
-    : ''
+  const editor = opts.editable ? `<script>${EDITOR_SCRIPT}</script>` : ''
+  // Token values are user-editable: escape "<" so a value can never close the <script>.
+  const backdrop = `<script>${BACKDROP_SCRIPT.replace('BACKDROP', JSON.stringify(opts.backdrop ?? '#111827').replace(/</g, '\\u003c'))}</script>`
   return `<!doctype html><html><head><meta charset="utf-8">
-${plain.map(s => `<style>${safe(s.content)}</style>`).join('\n')}
-<style type="text/tailwindcss">${safe(twCss)}</style>
+${plain.map(s => `<style>${safe(fixVh(s.content))}</style>`).join('\n')}
+<style type="text/tailwindcss">${safe(fixVh(twCss))}</style>
 <script src="${tailwindUrl}"></script>
 <style>
 html,body{margin:0}
 body{display:flow-root} /* contain child margins so body height = content height */
+[data-sk-frame]{min-height:0!important;height:auto!important} /* page wrappers must not force full-screen heights on every section */
+/* Previews are snapshots: show every element in its final state (no fade-ins on each re-render). */
+*,*::before,*::after{animation-duration:0s!important;animation-delay:0s!important;transition:none!important}
+${SCREEN_UTILITIES}
 .sk-expr{opacity:.55;font-style:italic}
-.sk-missing{border:1px dashed #a3a3a3;padding:8px;color:#737373;font:12px ui-monospace,monospace}
+.sk-missing{border:1px dashed #a3a3a3;padding:2px 6px;color:#737373;font:11px ui-monospace,monospace;background:rgba(163,163,163,.08)}
+/* A component we can't render (3D scene, chart…) that fills its container: show it as a labelled area. */
+.sk-missing:only-child{display:flex;align-items:center;justify-content:center;width:100%;height:100%;min-height:48px;box-sizing:border-box}
 ${opts.editable ? `html{-webkit-user-select:none;user-select:none}
 [data-sk]{cursor:grab}
-.sk-hover,.sk-sel,.sk-line{position:absolute;pointer-events:none;z-index:2147483647;display:none;box-sizing:border-box}
+sk-box{all:initial;position:absolute;pointer-events:none;z-index:2147483647;display:none;box-sizing:border-box}
+.sk-into{outline:2px dashed #3b82f6;outline-offset:-2px;background:rgba(59,130,246,.12)}
 .sk-hover{outline:2px dashed #3b82f6;outline-offset:-1px}
 .sk-sel{outline:2px solid #3b82f6;outline-offset:-1px;background:rgba(59,130,246,.06)}
 .sk-line{background:#3b82f6;border-radius:2px}` : ''}
 </style></head><body>${bodyHtml}
 <script>new ResizeObserver(()=>parent.postMessage({skHeight:Math.ceil(document.body.getBoundingClientRect().height)},'*')).observe(document.body)</script>
+${backdrop}
 ${editor}
 </body></html>`
 }

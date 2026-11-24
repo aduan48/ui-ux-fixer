@@ -8,7 +8,7 @@ import { useEffect, useState } from 'react'
 import { Canvas, CANVAS_DROP_ID } from './components/Canvas'
 import { ComponentBank } from './components/ComponentBank'
 import { ImportDialog } from './components/ImportDialog'
-import { NotesPanel } from './components/NotesPanel'
+import { RightPanel } from './components/RightPanel'
 import { placeholderMeta } from './lib/catalog'
 import { labelAt } from './lib/render'
 import { useStore } from './store'
@@ -90,9 +90,7 @@ export default function App() {
         <div className="flex min-h-0 flex-1">
           <ComponentBank onImport={() => setImporting(true)} />
           <Canvas />
-          <aside className="w-72 shrink-0 overflow-y-auto border-l border-neutral-200 bg-neutral-50/60">
-            <NotesPanel />
-          </aside>
+          <RightPanel />
         </div>
         <DragOverlay dropAnimation={null}>
           {dragging && <DragGhost item={dragging} />}

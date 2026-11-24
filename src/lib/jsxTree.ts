@@ -11,6 +11,8 @@ const MAX_NODES = 400 // keeps saved projects small even for giant components
 
 export interface TreeContext {
   source: string
+  /** `import Puck from '../components/Hero'` → Puck → { src: 'src/components/Hero.js', imp: 'default' }. */
+  componentImports: Map<string, { src: string; imp: string }>
   /** Project path of an image this file refers to (`./a.png`, `/logo.svg`), if it was imported. */
   resolveAsset: (ref: string) => string | undefined
   /** `import logo from './logo.png'` → logo → project path. */
@@ -46,9 +48,10 @@ function rootJsx(fn: Node): Node | undefined {
     return render && rootJsx(render)
   }
   if (fn.body?.type !== 'BlockStatement') return fn.body
+  // The LAST JSX return: early ones are usually loading/error states (`if (loading) return <Spinner/>`).
   let found: Node | undefined
   walk(fn.body.body, n => {
-    if (found || isFnLike(n)) return false // returns inside nested callbacks aren't the component's
+    if (isFnLike(n)) return false // returns inside nested callbacks aren't the component's
     if (n.type === 'ReturnStatement' && n.argument && hasJsx(n.argument)) found = n.argument
   })
   return found
@@ -141,6 +144,11 @@ export function jsxToTree(fn: Node, ctx: TreeContext): StaticNode | undefined {
     return out
   }
 
+  const compRef = (name: string, kids: StaticNode[], attrs: Record<string, string>): StaticNode => {
+    const from = ctx.componentImports.get(name.split('.')[0])
+    return { t: 'comp', name, ...(from && { src: from.src, imp: from.imp }), ...(Object.keys(attrs).length && { attrs }), children: kids }
+  }
+
   const element = (n: Node): StaticNode => {
     count++
     const name = n.openingElement.name
@@ -175,7 +183,16 @@ export function jsxToTree(fn: Node, ctx: TreeContext): StaticNode | undefined {
     }
     const kids = children(n.children)
     const hasAttrs = Object.keys(attrs).length > 0
-    if (isComp) return { t: 'comp', name: tag, ...(hasAttrs && { attrs }), children: kids }
+    if (isComp) {
+      // React Router: <Route path="/" element={<Home/>} /> (v6) or component={Home} (v5) → Home is the content.
+      for (const a of n.openingElement.attributes) {
+        if (a.type !== 'JSXAttribute' || !['element', 'component', 'render'].includes(a.name.name)) continue
+        const v = a.value?.type === 'JSXExpressionContainer' ? a.value.expression : undefined
+        if (v?.type === 'JSXElement') kids.push(element(v))
+        else if (v?.type === 'Identifier' && /^[A-Z]/.test(v.name)) kids.push(compRef(v.name, [], {}))
+      }
+      return compRef(tag, kids, attrs)
+    }
     return { t: 'el', tag, ...(cls && { cls }), ...(hasAttrs && { attrs }), children: kids }
   }
 

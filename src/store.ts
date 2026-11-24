@@ -3,7 +3,7 @@ import { create } from 'zustand'
 import { buildCurrentPages } from './lib/currentPages'
 import { createJSONStorage, persist, type StateStorage } from 'zustand/middleware'
 import { blockNode } from './lib/render'
-import type { BankItem, Block, Page, Project, ScannedComponent, SourceFile, StaticNode } from './types'
+import type { BankItem, Block, BrandToken, Page, Project, ScannedComponent, SourceFile, StaticNode, TokenKind, TokenRole } from './types'
 
 const id = () => crypto.randomUUID()
 
@@ -36,7 +36,17 @@ interface State {
   setProjectName: (name: string) => void
   setGlobalNotes: (notes: string) => void
   /** Replace the bank. Ids are `path#name`, so blocks stay linked across re-imports. */
-  importScan: (scan: { components: ScannedComponent[]; styles: SourceFile[]; assets: Record<string, string> }, source: string) => void
+  /**
+   * Load a scan. A different project (other folder/repo name) replaces everything: pages,
+   * notes, components, images, tokens. Re-importing the same project keeps the sketch.
+   */
+  importScan: (scan: { components: ScannedComponent[]; styles: SourceFile[]; assets: Record<string, string>; tokens: BrandToken[] }, source: string) => void
+
+  addToken: (kind: TokenKind) => void
+  updateToken: (id: string, patch: Partial<Omit<BrandToken, 'id' | 'kind'>>) => void
+  deleteToken: (id: string) => void
+  /** Toggle a role on a token; giving it takes the role from whichever token had it. */
+  toggleTokenRole: (id: string, role: TokenRole) => void
   /** Add the imported site's current pages as new tabs (never replaces existing ones). */
   addCurrentPages: () => number
 
@@ -109,20 +119,18 @@ export const useStore = create<State>()(
 
         setProjectName: name => set(s => ({ project: { ...s.project, name } })),
         setGlobalNotes: globalNotes => set(s => ({ project: { ...s.project, globalNotes } })),
-        importScan: ({ components, styles, assets }, source) =>
+        importScan: ({ components, styles, assets, tokens }, source) =>
           set(s => {
-            const project = {
-              ...s.project,
-              components,
-              styles,
-              assets,
-              source,
-              name: s.project.name === emptyProject().name ? source : s.project.name,
-            }
-            // On an empty canvas, start from the site as it is today. Never overwrite a sketch.
+            const same = s.project.source === source
+            const project: Project = same
+              ? { ...s.project, components, styles, assets, tokens: s.project.tokens.length ? s.project.tokens : tokens }
+              : { ...emptyProject(), name: source, source, components, styles, assets, tokens }
+            const reset = { selectedBlockId: null, editingBlockId: null, selectedElementPath: null }
+            // Start from the site as it is today, unless that would overwrite an existing sketch.
             const pages = currentPages(components)
-            if (!pages.length || s.project.pages.some(p => p.blocks.length)) return { project }
-            return { project: { ...project, pages }, activePageId: pages[0].id, selectedBlockId: null }
+            if (same && s.project.pages.some(p => p.blocks.length)) return { project }
+            if (!pages.length) return { project, activePageId: project.pages[0].id, ...reset }
+            return { project: { ...project, pages }, activePageId: pages[0].id, ...reset }
           }),
         addCurrentPages: () => {
           const pages = currentPages(get().project.components)
@@ -189,6 +197,25 @@ export const useStore = create<State>()(
             selectedBlockId,
             ...(s.editingBlockId !== selectedBlockId && { editingBlockId: null, selectedElementPath: null }),
           })),
+
+        addToken: kind => {
+          const defaults: Record<TokenKind, string> = { color: '#000000', font: 'Inter', fontSize: '1rem', radius: '0.5rem', spacing: '1rem' }
+          const token: BrandToken = { id: id(), kind, value: defaults[kind], count: 0, source: 'added' }
+          set(s => ({ project: { ...s.project, tokens: [...s.project.tokens, token] } }))
+        },
+        updateToken: (tokenId, patch) =>
+          set(s => ({ project: { ...s.project, tokens: s.project.tokens.map(t => (t.id === tokenId ? { ...t, ...patch } : t)) } })),
+        deleteToken: tokenId =>
+          set(s => ({ project: { ...s.project, tokens: s.project.tokens.filter(t => t.id !== tokenId) } })),
+        toggleTokenRole: (tokenId, role) =>
+          set(s => {
+            const had = s.project.tokens.find(t => t.id === tokenId)?.roles?.includes(role)
+            const tokens = s.project.tokens.map(t => {
+              const others = (t.roles ?? []).filter(r => r !== role)
+              return { ...t, roles: t.id === tokenId && !had ? [...others, role] : others }
+            })
+            return { project: { ...s.project, tokens } }
+          }),
 
         startEditing: blockId => set({ selectedBlockId: blockId, editingBlockId: blockId, selectedElementPath: null }),
         stopEditing: () => set({ editingBlockId: null, selectedElementPath: null }),

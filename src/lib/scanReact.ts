@@ -96,7 +96,16 @@ function routeName(path: string) {
   return '/' + route
 }
 
-export function scanReactFile(file: SourceFile, resolve: (from: string, ref: string) => string | undefined = () => undefined): ScannedComponent[] {
+export interface ScanContext {
+  /** Project path of an image referenced from `from`. */
+  resolveAsset: (from: string, ref: string) => string | undefined
+  /** Project path of a JS/TS module imported from `from` (extensions and index files tried). */
+  resolveModule: (from: string, ref: string) => string | undefined
+}
+
+const NO_CONTEXT: ScanContext = { resolveAsset: () => undefined, resolveModule: () => undefined }
+
+export function scanReactFile(file: SourceFile, scan: ScanContext = NO_CONTEXT): ScannedComponent[] {
   if (SKIP_FILE.test(file.path)) return []
   const ast = parse(file.content, {
     sourceType: 'module',
@@ -125,22 +134,27 @@ export function scanReactFile(file: SourceFile, resolve: (from: string, ref: str
   }
   for (const s of body) declare(s.type.startsWith('Export') ? s.declaration : s)
 
-  // `import logo from './logo.png'` (default or namespace imports of image files).
+  // `import logo from './logo.png'` (images) and `import Puck from './Hero'` (components, any local name).
   const imageImports = new Map<string, string>()
+  const componentImports = new Map<string, { src: string; imp: string }>()
   for (const s of body) {
     if (s.type !== 'ImportDeclaration') continue
-    const path = resolve(file.path, s.source.value)
-    if (path) for (const sp of s.specifiers) if (sp.type !== 'ImportSpecifier') imageImports.set(sp.local.name, path)
+    const image = scan.resolveAsset(file.path, s.source.value)
+    if (image) for (const sp of s.specifiers) if (sp.type !== 'ImportSpecifier') imageImports.set(sp.local.name, image)
+    const mod = scan.resolveModule(file.path, s.source.value)
+    if (mod)
+      for (const sp of s.specifiers)
+        componentImports.set(sp.local.name, { src: mod, imp: sp.type === 'ImportSpecifier' ? sp.imported.name ?? sp.imported.value : 'default' })
   }
-  const treeCtx = { source: file.content, resolveAsset: (ref: string) => resolve(file.path, ref), imageImports }
+  const treeCtx = { source: file.content, resolveAsset: (ref: string) => scan.resolveAsset(file.path, ref), imageImports, componentImports }
 
   // Pass 2: collect what is exported, as [name, function, props type].
-  const exported: [string, Node | undefined, Node | undefined][] = []
-  const fromLocal = (exportName: string, localName: string) => {
+  const exported: [string, Node | undefined, Node | undefined, boolean][] = []
+  const fromLocal = (exportName: string, localName: string, isDefault = false) => {
     const l = locals.get(localName)
     // `const Button = forwardRef(Inner)`: follow one more hop to the inner function.
     const fn = l?.fn?.type === 'Identifier' ? locals.get(l.fn.name)?.fn : l?.fn
-    exported.push([exportName, fn, l?.propsType])
+    exported.push([exportName, fn, l?.propsType, isDefault])
   }
   for (const s of body) {
     if (s.type === 'ExportNamedDeclaration' && !s.source) {
@@ -151,20 +165,22 @@ export function scanReactFile(file: SourceFile, resolve: (from: string, ref: str
     }
     if (s.type === 'ExportDefaultDeclaration') {
       const d = s.declaration
-      if (d.type === 'Identifier') fromLocal(d.name, d.name)
+      if (d.type === 'Identifier') fromLocal(d.name, d.name, true)
       else {
         const { target, propsType } = unwrap(d)
-        if (target?.type === 'Identifier') fromLocal(target.name, target.name)
-        else exported.push([target?.id?.name ?? d.id?.name ?? nameFromPath(file.path), target, propsType])
+        if (target?.type === 'Identifier') fromLocal(target.name, target.name, true)
+        else exported.push([target?.id?.name ?? d.id?.name ?? nameFromPath(file.path), target, propsType, true])
       }
     }
   }
 
   const isRoute = ROUTE_FILE.test(file.path)
   const out = new Map<string, ScannedComponent>()
-  for (const [name, fn, propsType] of exported) {
+  // Only framework route files with generic names (`export default function Page`) are renamed to their route.
+  const routeFileNamed = /(^|\/)app\/(.+\/)?(page|layout)\.[jt]sx?$|(^|\/)pages\/(.+\/)?index\.[jt]sx?$/.test(file.path)
+  for (const [name, fn, propsType, isDefault] of exported) {
     if (!/^[A-Z]/.test(name) || !isFnLike(fn) || !hasJsx(fn!.body)) continue
-    const displayName = isRoute && GENERIC_ROUTE_NAMES.has(name) ? routeName(file.path) : name
+    const displayName = isRoute && routeFileNamed && GENERIC_ROUTE_NAMES.has(name) ? routeName(file.path) : name
     const type: ComponentType = isRoute ? 'page' : guessType(splitWords(name), contentHints(fn!))
     const id = `${file.path}#${displayName}`
     out.set(id, {
@@ -175,6 +191,7 @@ export function scanReactFile(file: SourceFile, resolve: (from: string, ref: str
       type,
       framework: 'react',
       tree: jsxToTree(fn!, treeCtx),
+      ...(isDefault && { isDefault }),
     })
   }
   return [...out.values()]

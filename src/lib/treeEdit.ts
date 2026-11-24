@@ -25,25 +25,37 @@ export function removeNode(tree: StaticNode, path: string): StaticNode {
  */
 export function moveNode(tree: StaticNode, from: string, target: string, after: boolean): StaticNode {
   if (!from || from === target || (target + '.').startsWith(from + '.')) return tree
-  const fromP = split(from)
-  const node = fromP.reduce<StaticNode | undefined>((n, i) => n && kids(n)[i], tree)
+  const node = nodeAt(tree, from)
   if (!node) return tree
-
-  // Where the target sits once `from` is removed: an earlier sibling on the target's path shifts it left.
-  const targetP = split(target)
-  const fromParent = fromP.slice(0, -1)
-  const fromIndex = fromP[fromP.length - 1]
-  const depth = fromParent.length
-  if (targetP.length > depth && fromParent.every((v, i) => v === targetP[i]) && targetP[depth] > fromIndex) targetP[depth]--
-
+  const targetP = afterRemoval(split(from), split(target))
   const index = targetP.pop()! + (after ? 1 : 0)
   return update(removeNode(tree, from), targetP, children => [...children.slice(0, index), node, ...children.slice(index)])
+}
+
+/** Move the node at `from` to the end of the container at `parent` ("" = the block's root). */
+export function moveInto(tree: StaticNode, from: string, parent: string): StaticNode {
+  if (!from || (parent + '.').startsWith(from + '.')) return tree
+  const node = nodeAt(tree, from)
+  const container = nodeAt(tree, parent)
+  if (!node || !container || !('children' in container)) return tree
+  return update(removeNode(tree, from), afterRemoval(split(from), split(parent)), children => [...children, node])
+}
+
+const nodeAt = (tree: StaticNode, path: string) =>
+  split(path).reduce<StaticNode | undefined>((n, i) => n && kids(n)[i], tree)
+
+/** Where a path points once the node at `from` is removed: a removed earlier sibling on its way shifts it left. */
+function afterRemoval(from: number[], path: number[]): number[] {
+  const out = [...path]
+  const depth = from.length - 1
+  if (out.length > depth && from.slice(0, depth).every((v, i) => v === out[i]) && out[depth] > from[depth]) out[depth]--
+  return out
 }
 
 /** Move a node one step among its siblings (-1 up, +1 down). */
 export function nudgeNode(tree: StaticNode, path: string, dir: -1 | 1): StaticNode {
   const p = split(path)
-  const parent = p.slice(0, -1).reduce<StaticNode | undefined>((n, i) => n && kids(n)[i], tree)
+  const parent = nodeAt(tree, p.slice(0, -1).join('.'))
   const i = p[p.length - 1]
   const j = i + dir
   if (!parent || j < 0 || j >= kids(parent).length) return tree

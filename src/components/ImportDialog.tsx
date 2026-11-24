@@ -9,6 +9,7 @@ type Status =
   | { kind: 'idle' }
   | { kind: 'busy' }
   | { kind: 'done'; files: number; skipped: string[]; scan: ScanResult; loadedPages: boolean }
+  | { kind: 'confirm'; files: number; skipped: string[]; scan: ScanResult; source: string; replacing: string }
   | { kind: 'error'; message: string }
 
 export function ImportDialog({ onClose }: { onClose: () => void }) {
@@ -29,13 +30,25 @@ export function ImportDialog({ onClose }: { onClose: () => void }) {
       if (!files.some(f => !/\.(png|jpe?g|gif|svg|webp|avif|ico)$/i.test(f.path))) throw new Error('No .js, .jsx, .ts, .tsx, .html or .css files found in that folder.')
       const { scanProject } = await import('../lib/scan') // pulls in Babel only when needed
       const scan = scanProject(files)
-      const pagesBefore = useStore.getState().project.pages
-      useStore.getState().importScan(scan, source)
-      const loadedPages = useStore.getState().project.pages !== pagesBefore
-      setStatus({ kind: 'done', files: files.length, skipped, scan, loadedPages })
+      // A different project wipes the current one; ask first if there's work to lose.
+      const current = useStore.getState().project
+      const hasWork = current.pages.some(p => p.blocks.length || p.notes) || current.globalNotes || current.components.length
+      if (current.source !== source && hasWork) {
+        setStatus({ kind: 'confirm', files: files.length, skipped, scan, source, replacing: current.name })
+        return
+      }
+      apply(scan, source, files.length, skipped)
     } catch (e) {
       setStatus({ kind: 'error', message: e instanceof Error ? e.message : String(e) })
     }
+  }
+
+  const apply = (scan: ScanResult, source: string, fileCount: number, skipped: string[]) => {
+    const pagesBefore = useStore.getState().project.pages
+    useStore.getState().importScan(scan, source)
+    const pages = useStore.getState().project.pages
+    const loadedPages = pages !== pagesBefore && pages.some(p => p.blocks.length)
+    setStatus({ kind: 'done', files: fileCount, skipped, scan, loadedPages })
   }
 
   const onDrop = (e: React.DragEvent) => {
@@ -100,12 +113,33 @@ export function ImportDialog({ onClose }: { onClose: () => void }) {
             </p>
           </div>
 
+          {status.kind === 'confirm' && (
+            <div className="space-y-2 rounded-md border border-amber-200 bg-amber-50 p-3 text-[13px] text-amber-900" role="alert">
+              <p>
+                <b>{status.source}</b> is a different project. Importing it replaces <b>{status.replacing}</b>: its pages, notes,
+                components and brand tokens will be removed.
+              </p>
+              <div className="flex gap-2">
+                <button
+                  autoFocus
+                  onClick={() => apply(status.scan, status.source, status.files, status.skipped)}
+                  className="rounded-md bg-amber-600 px-3 py-1.5 font-medium text-white hover:bg-amber-700"
+                >
+                  Replace project
+                </button>
+                <button onClick={() => setStatus({ kind: 'idle' })} className="rounded-md border border-amber-300 px-3 py-1.5 font-medium hover:bg-amber-100">
+                  Cancel
+                </button>
+              </div>
+            </div>
+          )}
+
           {status.kind === 'error' && <p className="rounded-md bg-red-50 px-3 py-2 text-[13px] text-red-700">{status.message}</p>}
 
           {status.kind === 'done' && (
             <div className="space-y-2 text-[13px]">
               <p className="rounded-md bg-green-50 px-3 py-2 text-green-800">
-                Found <b>{status.scan.components.length}</b> components in {status.files} files ({Object.keys(status.scan.assets).length} images).
+                Found <b>{status.scan.components.length}</b> components in {status.files} files ({Object.keys(status.scan.assets).length} images, {status.scan.tokens.length} brand tokens).
               </p>
               {status.scan.failed.length > 0 && (
                 <Details title={`${status.scan.failed.length} files could not be parsed`} items={status.scan.failed.map(f => `${f.path}: ${f.error}`)} />

@@ -1,8 +1,9 @@
-import type { ScannedComponent, SourceFile } from '../types'
+import type { BrandToken, ScannedComponent, SourceFile } from '../types'
 import { isImage } from './files'
 import { resolveRef } from './paths'
 import { scanHtmlFile } from './scanHtml'
 import { scanReactFile } from './scanReact'
+import { extractTokens } from './tokens'
 
 export interface ScanResult {
   components: ScannedComponent[]
@@ -11,6 +12,7 @@ export interface ScanResult {
   styles: SourceFile[]
   /** Images by path, as data URLs. */
   assets: Record<string, string>
+  tokens: BrandToken[]
 }
 
 /** Scan every file; one bad file is reported, never fatal. Import this module lazily (it pulls in Babel). */
@@ -18,6 +20,20 @@ export function scanProject(files: SourceFile[]): ScanResult {
   const assets = Object.fromEntries(files.filter(f => isImage(f.path)).map(f => [f.path, f.content]))
   const known = new Set(Object.keys(assets))
   const resolve = (from: string, ref: string) => resolveRef(from, ref, known)
+  const modules = new Set(files.filter(f => /\.[mc]?[jt]sx?$/.test(f.path)).map(f => f.path))
+  const EXTS = ['', '.tsx', '.ts', '.jsx', '.js', '/index.tsx', '/index.ts', '/index.jsx', '/index.js']
+  const ctx = {
+    resolveAsset: resolve,
+    resolveModule: (from: string, ref: string) => {
+      if (!ref.startsWith('.') && !ref.startsWith('/') && !ref.startsWith('@/') && !ref.startsWith('~/')) return // packages
+      const local = ref.replace(/^[@~]\//, 'src/') // common `@/components/x` alias
+      for (const ext of EXTS) {
+        const p = local.startsWith('src/') ? local + ext : undefined
+        const hit = (p && modules.has(p) && p) || resolveRef(from, local + ext, modules)
+        if (hit) return hit
+      }
+    },
+  }
 
   const components: ScannedComponent[] = []
   const failed: ScanResult['failed'] = []
@@ -25,7 +41,7 @@ export function scanProject(files: SourceFile[]): ScanResult {
     const scanner = /\.[mc]?[jt]sx?$/.test(file.path) ? scanReactFile : /\.html?$/.test(file.path) ? scanHtmlFile : null
     if (!scanner) continue
     try {
-      components.push(...scanner(file, resolve))
+      components.push(...scanner(file, ctx))
     } catch (e) {
       failed.push({ path: file.path, error: e instanceof Error ? e.message : String(e) })
     }
@@ -50,5 +66,9 @@ export function scanProject(files: SourceFile[]): ScanResult {
     if (links.length) styles.unshift({ path: `${f.path} (links)`, content: links.map(h => `@import url("${h}");`).join('\n') })
   }
 
-  return { components, failed, styles, assets }
+  // tailwind.config colours/fonts as a v4 @theme, so previews understand classes like bg-brand-500.
+  const { tokens, themeCss } = extractTokens(files)
+  if (themeCss) styles.push({ path: 'tailwind.config (theme)', content: themeCss })
+
+  return { components, failed, styles, assets, tokens }
 }
